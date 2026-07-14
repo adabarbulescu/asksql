@@ -50,7 +50,7 @@ Open the terminal UI:
 asksql tui demo
 ```
 
-In the TUI, use `F2` to ask AI, `F3` to edit SQL, `F5` to run SQL, and select a table in the schema pane to preview rows.
+The TUI keeps the schema and AI/manual SQL controls on top, with full-width results below. Use `F2` to ask AI, `F3` to edit SQL, `F5` to run SQL, and select a table in the schema pane to preview rows.
 
 Run with local Ollama:
 

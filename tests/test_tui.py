@@ -30,6 +30,13 @@ class TuiTest(unittest.IsolatedAsyncioTestCase):
             editor = app.query_one("#sql")
             self.assertEqual(editor.text, "select 1")
 
+    async def test_tui_sets_status(self) -> None:
+        app = AskSqlApp(create_demo_db(), "ollama:qwen2.5-coder:7b")
+        async with app.run_test() as pilot:
+            app._set_status("Manual SQL - 3 rows")
+            await pilot.pause()
+            self.assertIsNotNone(app.query_one("#status"))
+
 
 if __name__ == "__main__":
     unittest.main()
