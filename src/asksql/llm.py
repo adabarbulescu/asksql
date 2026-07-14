@@ -6,6 +6,8 @@ import subprocess
 import urllib.request
 from urllib.error import URLError
 
+from asksql.sql import clean_sql
+
 
 SYSTEM = """Write SQLite SQL.
 Return only SQL, no markdown.
@@ -36,7 +38,12 @@ def ollama(model: str, schema: str, question: str) -> str:
     base_url = ollama_base_url()
     prompt = f"{SYSTEM}\n\nSchema:\n{schema}\n\nQuestion:\n{question}\n\nSQL:"
     data = post_json(f"{base_url}/api/generate", {"model": model, "prompt": prompt, "stream": False})
-    return str(data.get("response", "")).strip()
+    return clean_sql(str(data.get("response", "")))
+
+
+def ollama_models() -> list[dict[str, object]]:
+    data = get_json(f"{ollama_base_url()}/api/tags")
+    return list(data.get("models", []))
 
 
 def ollama_base_url() -> str:
@@ -77,6 +84,11 @@ def _wsl_urls() -> list[str]:
     return urls
 
 
+def get_json(url: str) -> dict[str, object]:
+    with urllib.request.urlopen(url, timeout=10) as res:
+        return json.loads(res.read().decode())
+
+
 def openai(model: str, schema: str, question: str) -> str:
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
@@ -94,4 +106,4 @@ def openai(model: str, schema: str, question: str) -> str:
         },
         {"Authorization": f"Bearer {api_key}"},
     )
-    return str(data["choices"][0]["message"]["content"]).strip()
+    return clean_sql(str(data["choices"][0]["message"]["content"]))

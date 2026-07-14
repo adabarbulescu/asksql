@@ -13,6 +13,8 @@ asksql sqlite://app.db "Which customers spent the most last month?"
 ## Install
 
 ```bash
+python3 -m venv .venv
+. .venv/bin/activate
 pip install -e .
 ```
 
@@ -21,7 +23,13 @@ pip install -e .
 Try the built-in demo:
 
 ```bash
-asksql demo "which customers spent the most?"
+asksql --yes demo "which customers spent the most?"
+```
+
+List local Ollama models:
+
+```bash
+asksql models
 ```
 
 Run with local Ollama:
@@ -33,7 +41,7 @@ asksql sqlite://app.db "show the newest 10 users"
 Use a specific Ollama model:
 
 ```bash
-asksql --model ollama:qwen2.5-coder sqlite://app.db "top customers by revenue"
+asksql --model ollama:qwen2.5-coder:7b sqlite://app.db "top customers by revenue"
 ```
 
 Use an OpenAI-compatible API:
@@ -51,8 +59,9 @@ asksql --dry-run sqlite://app.db "users created yesterday"
 ## Defaults
 
 - Shows generated SQL before running it.
+- Asks before executing generated SQL. Use `--yes` to skip the prompt.
 - Runs only read-only statements.
-- Uses Ollama first: `ollama:qwen2.5-coder`.
+- Uses Ollama first: `ollama:qwen2.5-coder:7b`.
 - Uses `OPENAI_BASE_URL` when set, otherwise `https://api.openai.com/v1`.
 - Does not send data rows to the model, only schema.
 

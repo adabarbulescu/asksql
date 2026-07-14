@@ -7,6 +7,7 @@ from pathlib import Path
 
 def create_demo_db() -> str:
     path = Path(tempfile.gettempdir()) / "asksql-demo.db"
+    path.unlink(missing_ok=True)
     with sqlite3.connect(path) as conn:
         conn.executescript(
             """

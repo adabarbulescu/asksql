@@ -1,6 +1,6 @@
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "asksql"
@@ -11,6 +11,10 @@ requires-python = ">=3.11"
 license = "MIT"
 authors = [{ name = "asksql contributors" }]
 keywords = ["sql", "sqlite", "ollama", "openai", "text-to-sql", "cli"]
+dependencies = ["rich>=13.7"]
 
 [project.scripts]
 asksql = "asksql.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
