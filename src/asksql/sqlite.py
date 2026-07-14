@@ -42,3 +42,11 @@ def query(db_url: str, sql: str) -> tuple[list[str], list[tuple[object, ...]]]:
     with sqlite3.connect(read_only_uri(db_url), uri=True) as conn:
         cursor = conn.execute(sql)
         return [col[0] for col in cursor.description or []], cursor.fetchmany(200)
+
+
+def quote_identifier(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'
+
+
+def preview_table(db_url: str, table: str, limit: int = 50) -> tuple[list[str], list[tuple[object, ...]]]:
+    return query(db_url, f"select * from {quote_identifier(table)} limit {limit}")

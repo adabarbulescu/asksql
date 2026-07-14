@@ -3,11 +3,11 @@ from __future__ import annotations
 from textual import work
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
-from textual.widgets import DataTable, Footer, Header, Input, Label, Static
+from textual.widgets import DataTable, Footer, Header, Input, Static, Tree
 
 from asksql.llm import generate_sql
 from asksql.safety import is_read_only
-from asksql.sqlite import inspect, query, schema
+from asksql.sqlite import inspect, preview_table, query, quote_identifier, schema
 
 
 class AskSqlApp(App[None]):
@@ -23,7 +23,6 @@ class AskSqlApp(App[None]):
     #schema {
         width: 34;
         border: solid $primary;
-        padding: 0 1;
     }
 
     #work {
@@ -46,7 +45,7 @@ class AskSqlApp(App[None]):
     }
     """
 
-    BINDINGS = [("ctrl+q", "quit", "Quit")]
+    BINDINGS = [("ctrl+q", "quit", "Quit"), ("ctrl+r", "refresh_schema", "Refresh")]
 
     def __init__(self, db_url: str, model: str) -> None:
         super().__init__()
@@ -56,20 +55,28 @@ class AskSqlApp(App[None]):
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         with Horizontal(id="main"):
-            yield Static(self._schema_text(), id="schema")
+            yield Tree("Schema", id="schema")
             with Vertical(id="work"):
                 yield Input(placeholder="Ask a question, then press Enter", id="question")
-                yield Static("Generated SQL will appear here.", id="sql")
+                yield Static("Ask a question or select a table from the schema.", id="sql")
                 yield DataTable(id="results")
         yield Footer()
 
     def on_mount(self) -> None:
+        self._load_schema_tree()
         self.query_one("#question", Input).focus()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         question = event.value.strip()
         if question:
             self.ask(question)
+
+    def on_tree_node_selected(self, event: Tree.NodeSelected[object]) -> None:
+        if isinstance(event.node.data, str):
+            self.preview(event.node.data)
+
+    def action_refresh_schema(self) -> None:
+        self._load_schema_tree()
 
     @work(thread=True)
     def ask(self, question: str) -> None:
@@ -85,6 +92,27 @@ class AskSqlApp(App[None]):
             return
         self.call_from_thread(self._set_sql, sql)
         self.call_from_thread(self._set_results, columns, rows)
+
+    @work(thread=True)
+    def preview(self, table: str) -> None:
+        sql = f"select * from {quote_identifier(table)} limit 50"
+        self.call_from_thread(self._set_sql, sql)
+        try:
+            columns, rows = preview_table(self.db_url, table)
+        except Exception as exc:
+            self.call_from_thread(self._set_sql, f"Error: {exc}")
+            return
+        self.call_from_thread(self._set_results, columns, rows)
+
+    def _load_schema_tree(self) -> None:
+        tree = self.query_one("#schema", Tree)
+        tree.clear()
+        tree.root.label = "Schema"
+        for table, columns in inspect(self.db_url).items():
+            table_node = tree.root.add(table, data=table)
+            for name, kind, primary_key in columns:
+                table_node.add_leaf(f"{name} {kind}{' pk' if primary_key else ''}".rstrip())
+        tree.root.expand()
 
     def _schema_text(self) -> str:
         lines = ["Schema", ""]

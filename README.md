@@ -50,6 +50,8 @@ Open the terminal UI:
 asksql tui demo
 ```
 
+In the TUI, select a table in the schema pane to preview rows, or type a question and press Enter.
+
 Run with local Ollama:
 
 ```bash
