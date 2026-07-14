@@ -61,6 +61,9 @@ class AskSqlApp(App[None]):
 
     BINDINGS = [
         ("ctrl+q", "quit", "Quit"),
+        ("ctrl+enter", "run_editor_sql", "Run SQL"),
+        ("tab", "focus_next", "Next pane"),
+        ("shift+tab", "focus_previous", "Previous pane"),
         ("f2", "focus_ask", "Ask AI"),
         ("f3", "focus_sql", "Edit SQL"),
         ("f5", "run_editor_sql", "Run SQL"),
@@ -80,7 +83,7 @@ class AskSqlApp(App[None]):
                 with Vertical(id="work"):
                     yield Input(placeholder="Ask AI - type a question, then press Enter", id="question")
                     yield TextArea("select * from customers limit 10", language="sql", id="sql")
-                    yield Static("F2 Ask AI | F3 SQL editor | F5 Run SQL | Ctrl+Q Quit", id="status")
+                    yield Static("Tab/Shift+Tab move | Enter asks/previews | Ctrl+Enter runs SQL | Ctrl+Q quits", id="status")
             with Vertical(id="bottom"):
                 yield DataTable(id="results")
         yield Footer()
@@ -88,7 +91,7 @@ class AskSqlApp(App[None]):
     def on_mount(self) -> None:
         self._load_schema_tree()
         self.query_one("#sql", TextArea).focus()
-        self._set_status("Ready - edit SQL and press F5, or press F2 to ask AI.")
+        self._set_status("Ready - Tab to move, Ctrl+Enter to run SQL, Enter in Ask AI to generate SQL.")
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         question = event.value.strip()
@@ -101,6 +104,12 @@ class AskSqlApp(App[None]):
 
     def action_refresh_schema(self) -> None:
         self._load_schema_tree()
+
+    def action_focus_next(self) -> None:
+        self.screen.focus_next()
+
+    def action_focus_previous(self) -> None:
+        self.screen.focus_previous()
 
     def action_focus_ask(self) -> None:
         self.query_one("#question", Input).focus()

@@ -37,6 +37,16 @@ class TuiTest(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             self.assertIsNotNone(app.query_one("#status"))
 
+    async def test_tui_focus_actions(self) -> None:
+        app = AskSqlApp(create_demo_db(), "ollama:qwen2.5-coder:7b")
+        async with app.run_test() as pilot:
+            app.action_focus_ask()
+            await pilot.pause()
+            self.assertEqual(app.focused.id, "question")
+            app.action_focus_sql()
+            await pilot.pause()
+            self.assertEqual(app.focused.id, "sql")
+
 
 if __name__ == "__main__":
     unittest.main()
