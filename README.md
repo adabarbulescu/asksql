@@ -44,6 +44,12 @@ Run read-only SQL directly:
 asksql --yes run demo "select name from customers order by id"
 ```
 
+Open the terminal UI:
+
+```bash
+asksql tui demo
+```
+
 Run with local Ollama:
 
 ```bash

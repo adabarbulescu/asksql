@@ -14,6 +14,7 @@ from asksql.llm import generate_sql, ollama_models
 from asksql.safety import is_read_only
 from asksql.sql import pretty_sql
 from asksql.sqlite import inspect, query, schema
+from asksql.tui import run_tui
 
 console = Console()
 error_console = Console(stderr=True)
@@ -25,7 +26,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true", help="show SQL without running it")
     parser.add_argument("-y", "--yes", action="store_true", help="run read-only SQL without prompting")
     parser.add_argument("--show-schema", action="store_true", help="print the schema sent to the model")
-    parser.add_argument("db_url", nargs="?", help="database URL, demo, models, schema, or run")
+    parser.add_argument("db_url", nargs="?", help="database URL, demo, models, schema, run, or tui")
     parser.add_argument("question", nargs=argparse.REMAINDER, help="question, schema DB URL, or SQL")
     args = parser.parse_args(argv)
     text = " ".join(args.question).strip()
@@ -36,6 +37,9 @@ def main(argv: list[str] | None = None) -> int:
         return show_schema(text or "demo")
     if args.db_url == "run":
         return run_sql_command(text, args.yes)
+    if args.db_url == "tui":
+        run_tui(create_demo_db() if not text or text == "demo" else text, args.model)
+        return 0
 
     if not args.db_url or not text:
         parser.print_help()

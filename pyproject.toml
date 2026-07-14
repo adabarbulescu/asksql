@@ -11,7 +11,7 @@ requires-python = ">=3.11"
 license = "MIT"
 authors = [{ name = "asksql contributors" }]
 keywords = ["sql", "sqlite", "ollama", "openai", "text-to-sql", "cli"]
-dependencies = ["rich>=13.7"]
+dependencies = ["rich>=13.7", "textual>=8.2"]
 
 [project.scripts]
 asksql = "asksql.cli:main"
