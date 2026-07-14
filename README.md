@@ -50,7 +50,7 @@ Open the terminal UI:
 asksql tui demo
 ```
 
-In the TUI, select a table in the schema pane to preview rows, or type a question and press Enter.
+In the TUI, select a table in the schema pane to preview rows, type a question and press Enter to generate SQL, or edit SQL directly and press `Ctrl+Enter` to run it.
 
 Run with local Ollama:
 
