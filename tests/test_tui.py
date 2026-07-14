@@ -10,6 +10,7 @@ class TuiTest(unittest.IsolatedAsyncioTestCase):
         app = AskSqlApp(create_demo_db(), "ollama:qwen2.5-coder:7b")
         async with app.run_test() as pilot:
             self.assertIn("customers", app._schema_text())
+            self.assertEqual(app.focused.id, "sql")
             await pilot.press("ctrl+q")
 
     async def test_tui_previews_table(self) -> None:

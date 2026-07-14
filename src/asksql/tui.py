@@ -46,8 +46,10 @@ class AskSqlApp(App[None]):
 
     BINDINGS = [
         ("ctrl+q", "quit", "Quit"),
+        ("f2", "focus_ask", "Ask AI"),
+        ("f3", "focus_sql", "Edit SQL"),
+        ("f5", "run_editor_sql", "Run SQL"),
         ("ctrl+r", "refresh_schema", "Refresh schema"),
-        ("ctrl+enter", "run_editor_sql", "Run SQL"),
     ]
 
     def __init__(self, db_url: str, model: str) -> None:
@@ -60,14 +62,14 @@ class AskSqlApp(App[None]):
         with Horizontal(id="main"):
             yield Tree("Schema", id="schema")
             with Vertical(id="work"):
-                yield Input(placeholder="Ask a question, then press Enter", id="question")
+                yield Input(placeholder="Ask AI: type a question, then press Enter", id="question")
                 yield TextArea("select * from customers limit 10", language="sql", id="sql")
                 yield DataTable(id="results")
         yield Footer()
 
     def on_mount(self) -> None:
         self._load_schema_tree()
-        self.query_one("#question", Input).focus()
+        self.query_one("#sql", TextArea).focus()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         question = event.value.strip()
@@ -80,6 +82,12 @@ class AskSqlApp(App[None]):
 
     def action_refresh_schema(self) -> None:
         self._load_schema_tree()
+
+    def action_focus_ask(self) -> None:
+        self.query_one("#question", Input).focus()
+
+    def action_focus_sql(self) -> None:
+        self.query_one("#sql", TextArea).focus()
 
     def action_run_editor_sql(self) -> None:
         self.run_sql(self.query_one("#sql", TextArea).text)
