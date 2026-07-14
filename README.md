@@ -36,6 +36,12 @@ Use an OpenAI-compatible API:
 OPENAI_API_KEY=... asksql --model openai:gpt-4.1-mini sqlite://app.db "weekly signups"
 ```
 
+Preview SQL without running it:
+
+```bash
+asksql --dry-run sqlite://app.db "users created yesterday"
+```
+
 ## Defaults
 
 - Shows generated SQL before running it.

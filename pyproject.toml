@@ -14,6 +14,3 @@ keywords = ["sql", "sqlite", "ollama", "openai", "text-to-sql", "cli"]
 
 [project.scripts]
 asksql = "asksql.cli:main"
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
