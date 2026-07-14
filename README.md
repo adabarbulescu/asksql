@@ -18,6 +18,12 @@ pip install -e .
 
 ## Use
 
+Try the built-in demo:
+
+```bash
+asksql demo "which customers spent the most?"
+```
+
 Run with local Ollama:
 
 ```bash

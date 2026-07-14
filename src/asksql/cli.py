@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import sys
 
+from asksql.demo import create_demo_db
 from asksql.llm import generate_sql
 from asksql.safety import is_read_only
 from asksql.sqlite import query, schema
@@ -12,7 +13,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Ask your database questions from the terminal.")
     parser.add_argument("--model", default="ollama:qwen2.5-coder", help="ollama:name or openai:name")
     parser.add_argument("--dry-run", action="store_true", help="show SQL without running it")
-    parser.add_argument("db_url", nargs="?", help="database URL, starting with sqlite://...")
+    parser.add_argument("db_url", nargs="?", help="database URL, starting with sqlite://..., or demo")
     parser.add_argument("question", nargs="?", help="natural-language question")
     args = parser.parse_args(argv)
 
@@ -20,7 +21,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 0
 
-    sql = generate_sql(args.model, schema(args.db_url), args.question)
+    db_url = create_demo_db() if args.db_url == "demo" else args.db_url
+    sql = generate_sql(args.model, schema(db_url), args.question)
     print("Generated SQL:\n")
     print(sql)
 
@@ -30,7 +32,7 @@ def main(argv: list[str] | None = None) -> int:
         print("\nRefusing to run non-read-only SQL.", file=sys.stderr)
         return 2
 
-    columns, rows = query(args.db_url, sql)
+    columns, rows = query(db_url, sql)
     print()
     print_table(columns, rows)
     return 0

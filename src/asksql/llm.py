@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import urllib.request
+from urllib.error import URLError
 
 
 SYSTEM = """Write SQLite SQL.
@@ -31,10 +33,48 @@ def post_json(url: str, payload: dict[str, object], headers: dict[str, str] | No
 
 
 def ollama(model: str, schema: str, question: str) -> str:
-    base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
+    base_url = ollama_base_url()
     prompt = f"{SYSTEM}\n\nSchema:\n{schema}\n\nQuestion:\n{question}\n\nSQL:"
     data = post_json(f"{base_url}/api/generate", {"model": model, "prompt": prompt, "stream": False})
     return str(data.get("response", "")).strip()
+
+
+def ollama_base_url() -> str:
+    if os.getenv("OLLAMA_BASE_URL"):
+        return os.environ["OLLAMA_BASE_URL"].rstrip("/")
+    for url in ["http://localhost:11434", *_wsl_urls()]:
+        try:
+            post_json(f"{url}/api/show", {"name": "qwen2.5-coder:7b"})
+            return url
+        except (OSError, URLError, TimeoutError):
+            pass
+    return "http://localhost:11434"
+
+
+def _wsl_urls() -> list[str]:
+    urls = []
+    try:
+        with open("/etc/resolv.conf", encoding="utf-8") as file:
+            urls.extend(f"http://{line.split()[1]}:11434" for line in file if line.startswith("nameserver "))
+    except OSError:
+        pass
+    try:
+        output = subprocess.check_output(
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-Command",
+                "(Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.InterfaceAlias -like '*WSL*' -or $_.InterfaceAlias -like '*vEthernet*' } | Select-Object -First 1 -ExpandProperty IPAddress)",
+            ],
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=3,
+        ).strip()
+        if output:
+            urls.append(f"http://{output}:11434")
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return urls
 
 
 def openai(model: str, schema: str, question: str) -> str:
