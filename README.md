@@ -32,6 +32,18 @@ List local Ollama models:
 asksql models
 ```
 
+Inspect a database schema:
+
+```bash
+asksql schema demo
+```
+
+Run read-only SQL directly:
+
+```bash
+asksql --yes run demo "select name from customers order by id"
+```
+
 Run with local Ollama:
 
 ```bash
