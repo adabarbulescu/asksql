@@ -81,18 +81,31 @@ def main(argv: list[str] | None = None) -> int:
 
 def print_result(result: QueryResult, output_format: str, output: str | None = None, force: bool = False) -> int:
     if output_format == "table":
+        if output:
+            error_console.print("[red]--output requires --format csv, json, or markdown.[/]")
+            return 1
+        if force:
+            error_console.print("[red]--force requires --output.[/]")
+            return 1
         print_table(result)
         return 0
+    if force and not output:
+        error_console.print("[red]--force requires --output.[/]")
+        return 1
     text = format_result(result, output_format)
     if output:
         path = Path(output)
         if path.exists() and not force:
             error_console.print(f"[red]Output exists:[/] {path} (use --force to overwrite)")
             return 1
-        path.write_text(text)
+        try:
+            path.write_text(text, encoding="utf-8")
+        except OSError as exc:
+            error_console.print(f"[red]Could not write output:[/] {exc}")
+            return 1
         console.print(f"Wrote {output_format} to {path}")
     else:
-        console.print(text, end="")
+        sys.stdout.write(text)
     if result.truncated:
         error_console.print(f"[yellow]Results limited to {result.limit} rows.[/]")
     return 0

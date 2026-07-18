@@ -1,9 +1,11 @@
 import json
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 
-from asksql.cli import main
+from asksql.cli import main, print_result
 from asksql.export import format_result
 from asksql.sqlite import QueryResult
 
@@ -25,6 +27,16 @@ class ExportTest(unittest.TestCase):
             self.assertEqual(exit_code, 0)
             self.assertEqual(json.loads(output.read_text()), [{"id": 1, "name": "Ada"}])
 
+    def test_stdout_export_preserves_markup_literals(self) -> None:
+        stdout = StringIO()
+        result = QueryResult(["value"], [("[red]literal[/red]",)], False, 200)
+
+        with redirect_stdout(stdout):
+            exit_code = print_result(result, "csv")
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stdout.getvalue(), "value\r\n[red]literal[/red]\r\n")
+
     def test_refuses_to_overwrite_without_force(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "customers.csv"
@@ -44,6 +56,22 @@ class ExportTest(unittest.TestCase):
 
             self.assertEqual(exit_code, 0)
             self.assertEqual(output.read_text(), "id\n1\n")
+
+    def test_reports_write_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            exit_code = print_result(QueryResult(["id"], [(1,)], False, 200), "csv", directory, force=True)
+
+            self.assertEqual(exit_code, 1)
+
+    def test_rejects_output_for_table_format(self) -> None:
+        exit_code = print_result(QueryResult(["id"], [(1,)], False, 200), "table", "ignored.csv")
+
+        self.assertEqual(exit_code, 1)
+
+    def test_rejects_force_without_output(self) -> None:
+        exit_code = print_result(QueryResult(["id"], [(1,)], False, 200), "csv", force=True)
+
+        self.assertEqual(exit_code, 1)
 
 
 if __name__ == "__main__":
