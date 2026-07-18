@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 
 from rich.console import Console
 from rich.panel import Panel
@@ -10,10 +11,11 @@ from rich.syntax import Syntax
 from rich.table import Table
 
 from asksql.demo import create_demo_db
+from asksql.export import format_result
 from asksql.llm import generate_sql, ollama_models
 from asksql.safety import is_read_only
 from asksql.sql import pretty_sql
-from asksql.sqlite import DEFAULT_LIMIT, inspect, limited_query, schema
+from asksql.sqlite import QueryResult, inspect, query_result, schema
 from asksql.tui import run_tui
 
 console = Console()
@@ -24,6 +26,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Ask your database questions from the terminal.")
     parser.add_argument("--model", default="ollama:qwen2.5-coder:7b", help="ollama:name or openai:name")
     parser.add_argument("--dry-run", action="store_true", help="show SQL without running it")
+    parser.add_argument("--format", choices=["table", "csv", "json", "markdown"], default="table", help="result output format")
+    parser.add_argument("--output", help="write csv/json/markdown output to a file")
+    parser.add_argument("--force", action="store_true", help="overwrite --output if it exists")
     parser.add_argument("-y", "--yes", action="store_true", help="run read-only SQL without prompting")
     parser.add_argument("--show-schema", action="store_true", help="print the schema sent to the model")
     parser.add_argument("db_url", nargs="?", help="database URL, demo, models, schema, run, or tui")
@@ -36,7 +41,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.db_url == "schema":
         return show_schema(text or "demo")
     if args.db_url == "run":
-        return run_sql_command(text, args.yes)
+        return run_sql_command(text, args.yes, args.format, args.output, args.force)
     if args.db_url == "tui":
         run_tui(create_demo_db() if not text or text == "demo" else text, args.model)
         return 0
@@ -67,19 +72,38 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     try:
-        columns, rows, truncated = limited_query(db_url, sql)
+        result = query_result(db_url, sql)
     except Exception as exc:
         error_console.print(f"[red]Query failed:[/] {exc}")
         return 1
-    print_table(columns, rows, truncated)
+    return print_result(result, args.format, args.output, args.force)
+
+
+def print_result(result: QueryResult, output_format: str, output: str | None = None, force: bool = False) -> int:
+    if output_format == "table":
+        print_table(result)
+        return 0
+    text = format_result(result, output_format)
+    if output:
+        path = Path(output)
+        if path.exists() and not force:
+            error_console.print(f"[red]Output exists:[/] {path} (use --force to overwrite)")
+            return 1
+        path.write_text(text)
+        console.print(f"Wrote {output_format} to {path}")
+    else:
+        console.print(text, end="")
+    if result.truncated:
+        error_console.print(f"[yellow]Results limited to {result.limit} rows.[/]")
     return 0
 
 
-def print_table(columns: list[str], rows: list[tuple[object, ...]], truncated: bool = False) -> None:
+def print_table(result: QueryResult) -> None:
+    columns, rows = result.columns, result.rows
     if not columns:
         console.print("[dim](no columns)[/]")
         return
-    title = f"{DEFAULT_LIMIT}+ rows (limited to {DEFAULT_LIMIT})" if truncated else f"{len(rows)} rows"
+    title = f"{result.limit}+ rows (limited to {result.limit})" if result.truncated else f"{len(rows)} rows"
     table = Table(title=title, show_lines=False)
     for column in columns:
         table.add_column(column, overflow="fold")
@@ -88,7 +112,7 @@ def print_table(columns: list[str], rows: list[tuple[object, ...]], truncated: b
     console.print(table)
 
 
-def run_sql_command(text: str, yes: bool) -> int:
+def run_sql_command(text: str, yes: bool, output_format: str = "table", output: str | None = None, force: bool = False) -> int:
     target, _, sql = text.partition(" ")
     if not target or not sql:
         console.print("[red]Usage:[/] asksql run <db-url|demo> \"select ...\"")
@@ -102,12 +126,11 @@ def run_sql_command(text: str, yes: bool) -> int:
     if not yes and not confirm_run():
         return 1
     try:
-        columns, rows, truncated = limited_query(db_url, sql)
+        result = query_result(db_url, sql)
     except Exception as exc:
         error_console.print(f"[red]Query failed:[/] {exc}")
         return 1
-    print_table(columns, rows, truncated)
-    return 0
+    return print_result(result, output_format, output, force)
 
 
 def confirm_run() -> bool:

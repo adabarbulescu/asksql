@@ -44,6 +44,14 @@ Run read-only SQL directly:
 asksql --yes run demo "select name from customers order by id"
 ```
 
+Export query results:
+
+```bash
+asksql --yes --format csv --output customers.csv run demo "select * from customers"
+asksql --yes --format json demo "show all customers"
+asksql --yes --format markdown demo "orders by customer"
+```
+
 Open the terminal UI:
 
 ```bash
