@@ -4,6 +4,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
 from asksql.cli import main, print_result
 from asksql.export import format_result
@@ -47,6 +48,50 @@ class ExportTest(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(stdout.getvalue(), "id\r\n1\r\n")
         self.assertIn("SQL", stderr.getvalue())
+
+    def test_show_schema_uses_stderr_for_structured_export(self) -> None:
+        stdout = StringIO()
+        stderr = StringIO()
+
+        with patch("asksql.cli.generate_sql", return_value="select id from customers order by id limit 1"):
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                exit_code = main(["--yes", "--show-schema", "--format", "csv", "demo", "show customers"])
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stdout.getvalue(), "id\r\n1\r\n")
+        self.assertIn("Schema", stderr.getvalue())
+        self.assertIn("SQL", stderr.getvalue())
+
+    def test_run_honors_limit(self) -> None:
+        stdout = StringIO()
+        stderr = StringIO()
+
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            exit_code = main(["--yes", "--limit", "1", "--format", "csv", "run", "demo select id from customers order by id"])
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stdout.getvalue(), "id\r\n1\r\n")
+        self.assertIn("Results limited to 1 rows", stderr.getvalue())
+
+    def test_generated_query_honors_limit(self) -> None:
+        stdout = StringIO()
+        stderr = StringIO()
+
+        with patch("asksql.cli.generate_sql", return_value="select id from customers order by id"):
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                exit_code = main(["--yes", "--limit", "1", "--format", "csv", "demo", "show customers"])
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stdout.getvalue(), "id\r\n1\r\n")
+        self.assertIn("Results limited to 1 rows", stderr.getvalue())
+
+    def test_invalid_limit_exits_before_query(self) -> None:
+        for value in ["0", "-1", "10001", "nope"]:
+            with self.subTest(value=value):
+                with patch("asksql.cli.query_result") as query:
+                    with self.assertRaises(SystemExit):
+                        main(["--yes", "--limit", value, "run", "demo select id from customers"])
+                query.assert_not_called()
 
     def test_refuses_to_overwrite_without_force(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

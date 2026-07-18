@@ -70,10 +70,11 @@ class AskSqlApp(App[None]):
         ("ctrl+r", "refresh_schema", "Refresh schema"),
     ]
 
-    def __init__(self, db_url: str, model: str) -> None:
+    def __init__(self, db_url: str, model: str, limit: int = DEFAULT_LIMIT) -> None:
         super().__init__()
         self.db_url = db_url
         self.model = model
+        self.limit = limit
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -143,11 +144,11 @@ class AskSqlApp(App[None]):
             return
         self.call_from_thread(self._set_status, f"Running: {source}")
         try:
-            columns, rows, truncated = limited_query(self.db_url, sql)
+            columns, rows, truncated = limited_query(self.db_url, sql, self.limit)
         except Exception as exc:
             self.call_from_thread(self._set_status, f"Query failed: {exc}")
             return
-        suffix = f"{DEFAULT_LIMIT}+ rows, limited to {DEFAULT_LIMIT}" if truncated else f"{len(rows)} rows"
+        suffix = f"{self.limit}+ rows, limited to {self.limit}" if truncated else f"{len(rows)} rows"
         self.call_from_thread(self._set_status, f"{source} - {suffix}")
         self.call_from_thread(self._set_results, columns, rows)
 
@@ -196,5 +197,5 @@ class AskSqlApp(App[None]):
             table.add_row(*(str(value) for value in row))
 
 
-def run_tui(db_url: str, model: str) -> None:
-    AskSqlApp(db_url, model).run()
+def run_tui(db_url: str, model: str, limit: int = DEFAULT_LIMIT) -> None:
+    AskSqlApp(db_url, model, limit).run()

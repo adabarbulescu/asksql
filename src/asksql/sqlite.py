@@ -8,6 +8,7 @@ from urllib.parse import unquote, urlparse
 
 Column = tuple[str, str, bool]
 DEFAULT_LIMIT = 200
+MAX_LIMIT = 10_000
 
 
 @dataclass(frozen=True)

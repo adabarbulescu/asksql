@@ -52,6 +52,14 @@ asksql --yes --format json demo "show all customers"
 asksql --yes --format markdown demo "orders by customer"
 ```
 
+Limit returned rows:
+
+```bash
+asksql --limit 500 demo "show customers"
+asksql --limit 1000 --format csv run demo "select * from customers"
+asksql --limit 1000 tui demo
+```
+
 Open the terminal UI:
 
 ```bash
@@ -89,6 +97,7 @@ asksql --dry-run sqlite://app.db "users created yesterday"
 - Shows generated SQL before running it.
 - Asks before executing generated SQL. Use `--yes` to skip the prompt.
 - Shows when results are limited to 200 rows.
+- Returns at most 200 rows by default. Use `--limit` to choose 1-10000 returned rows.
 - Runs only read-only statements.
 - Uses Ollama first: `ollama:qwen2.5-coder:7b`.
 - Uses `OPENAI_BASE_URL` when set, otherwise `https://api.openai.com/v1`.

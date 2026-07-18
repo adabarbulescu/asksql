@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 from asksql.demo import create_demo_db
-from asksql.sqlite import inspect, limited_query, preview_table, quote_identifier
+from asksql.sqlite import DEFAULT_LIMIT, inspect, limited_query, preview_table, query_result, quote_identifier
 
 
 class SqliteTest(unittest.TestCase):
@@ -30,6 +30,18 @@ class SqliteTest(unittest.TestCase):
         self.assertEqual(columns, ["id"])
         self.assertEqual(rows, [(1,)])
         self.assertTrue(truncated)
+
+    def test_query_result_default_limit(self) -> None:
+        result = query_result(create_demo_db(), "select id from customers order by id")
+
+        self.assertEqual(result.limit, DEFAULT_LIMIT)
+
+    def test_query_result_uses_configured_limit(self) -> None:
+        result = query_result(create_demo_db(), "select id from customers order by id", limit=1)
+
+        self.assertEqual(result.limit, 1)
+        self.assertEqual(result.rows, [(1,)])
+        self.assertTrue(result.truncated)
 
     def test_quote_identifier(self) -> None:
         self.assertEqual(quote_identifier('weird"name'), '"weird""name"')

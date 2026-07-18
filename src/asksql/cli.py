@@ -15,7 +15,7 @@ from asksql.export import format_result
 from asksql.llm import generate_sql, ollama_models
 from asksql.safety import is_read_only
 from asksql.sql import pretty_sql
-from asksql.sqlite import QueryResult, inspect, query_result, schema
+from asksql.sqlite import DEFAULT_LIMIT, MAX_LIMIT, QueryResult, inspect, query_result, schema
 from asksql.tui import run_tui
 
 console = Console()
@@ -29,6 +29,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--format", choices=["table", "csv", "json", "markdown"], default="table", help="result output format")
     parser.add_argument("--output", help="write csv/json/markdown output to a file")
     parser.add_argument("--force", action="store_true", help="overwrite --output if it exists")
+    parser.add_argument("--limit", type=result_limit, default=DEFAULT_LIMIT, help=f"maximum result rows, 1-{MAX_LIMIT}")
     parser.add_argument("-y", "--yes", action="store_true", help="run read-only SQL without prompting")
     parser.add_argument("--show-schema", action="store_true", help="print the schema sent to the model")
     parser.add_argument("db_url", nargs="?", help="database URL, demo, models, schema, run, or tui")
@@ -43,9 +44,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.db_url == "schema":
         return show_schema(text or "demo")
     if args.db_url == "run":
-        return run_sql_command(text, args.yes, args.format, args.output, args.force)
+        return run_sql_command(text, args.yes, args.format, args.output, args.force, args.limit)
     if args.db_url == "tui":
-        run_tui(create_demo_db() if not text or text == "demo" else text, args.model)
+        run_tui(create_demo_db() if not text or text == "demo" else text, args.model, args.limit)
         return 0
 
     if not args.db_url or not text:
@@ -55,15 +56,15 @@ def main(argv: list[str] | None = None) -> int:
     db_url = create_demo_db() if args.db_url == "demo" else args.db_url
     try:
         db_schema = schema(db_url)
+        sql_console = console if args.format == "table" and not args.output else error_console
         if args.show_schema:
-            console.print(Panel(db_schema, title="Schema", border_style="blue"))
-        with console.status(f"Asking {args.model}...", spinner="dots"):
+            sql_console.print(Panel(db_schema, title="Schema", border_style="blue"))
+        with sql_console.status(f"Asking {args.model}...", spinner="dots"):
             sql = generate_sql(args.model, db_schema, text)
     except Exception as exc:
         error_console.print(f"[red]Error:[/] {exc}")
         return 1
 
-    sql_console = console if args.format == "table" and not args.output else error_console
     sql_console.print(Panel(Syntax(sql, "sql", theme="ansi_dark"), title="Generated SQL", border_style="green"))
 
     if args.dry_run:
@@ -75,7 +76,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     try:
-        result = query_result(db_url, sql)
+        result = query_result(db_url, sql, args.limit)
     except Exception as exc:
         error_console.print(f"[red]Query failed:[/] {exc}")
         return 1
@@ -115,6 +116,16 @@ def validate_output_options(output_format: str, output: str | None = None, force
     return True
 
 
+def result_limit(value: str) -> int:
+    try:
+        limit = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("limit must be an integer") from exc
+    if not 1 <= limit <= MAX_LIMIT:
+        raise argparse.ArgumentTypeError(f"limit must be between 1 and {MAX_LIMIT}")
+    return limit
+
+
 def print_table(result: QueryResult) -> None:
     columns, rows = result.columns, result.rows
     if not columns:
@@ -129,7 +140,14 @@ def print_table(result: QueryResult) -> None:
     console.print(table)
 
 
-def run_sql_command(text: str, yes: bool, output_format: str = "table", output: str | None = None, force: bool = False) -> int:
+def run_sql_command(
+    text: str,
+    yes: bool,
+    output_format: str = "table",
+    output: str | None = None,
+    force: bool = False,
+    limit: int = DEFAULT_LIMIT,
+) -> int:
     target, _, sql = text.partition(" ")
     if not target or not sql:
         console.print("[red]Usage:[/] asksql run <db-url|demo> \"select ...\"")
@@ -144,7 +162,7 @@ def run_sql_command(text: str, yes: bool, output_format: str = "table", output: 
     if not yes and not confirm_run():
         return 1
     try:
-        result = query_result(db_url, sql)
+        result = query_result(db_url, sql, limit)
     except Exception as exc:
         error_console.print(f"[red]Query failed:[/] {exc}")
         return 1

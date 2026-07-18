@@ -2,7 +2,7 @@ import unittest
 from unittest.mock import patch
 
 from asksql.demo import create_demo_db
-from asksql.sqlite import preview_table
+from asksql.sqlite import DEFAULT_LIMIT, preview_table
 from asksql.tui import AskSqlApp
 
 
@@ -55,6 +55,16 @@ class TuiTest(unittest.IsolatedAsyncioTestCase):
             app._set_status("Manual SQL - 3 rows")
             await pilot.pause()
             self.assertIsNotNone(app.query_one("#status"))
+
+    async def test_tui_stores_configured_limit(self) -> None:
+        app = AskSqlApp(create_demo_db(), "ollama:qwen2.5-coder:7b", limit=1)
+
+        self.assertEqual(app.limit, 1)
+
+    async def test_tui_default_limit(self) -> None:
+        app = AskSqlApp(create_demo_db(), "ollama:qwen2.5-coder:7b")
+
+        self.assertEqual(app.limit, DEFAULT_LIMIT)
 
     async def test_tui_focus_actions(self) -> None:
         app = AskSqlApp(create_demo_db(), "ollama:qwen2.5-coder:7b")
