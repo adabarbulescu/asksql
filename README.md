@@ -50,7 +50,7 @@ Open the terminal UI:
 asksql tui demo
 ```
 
-The TUI keeps schema and AI/manual SQL controls on top, with full-width results below. Use `Tab` / `Shift+Tab` to move between panes, `Enter` to ask AI or preview a selected table, and `Ctrl+Enter` to run SQL.
+The TUI keeps schema and AI/manual SQL controls on top, with full-width results below. Use `Tab` / `Shift+Tab` to move between panes, `Enter` to generate SQL or preview a selected table, and `Ctrl+Enter` to run reviewed SQL.
 
 Run with local Ollama:
 
@@ -80,6 +80,7 @@ asksql --dry-run sqlite://app.db "users created yesterday"
 
 - Shows generated SQL before running it.
 - Asks before executing generated SQL. Use `--yes` to skip the prompt.
+- Shows when results are limited to 200 rows.
 - Runs only read-only statements.
 - Uses Ollama first: `ollama:qwen2.5-coder:7b`.
 - Uses `OPENAI_BASE_URL` when set, otherwise `https://api.openai.com/v1`.

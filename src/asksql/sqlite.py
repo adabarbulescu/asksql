@@ -6,6 +6,7 @@ from urllib.parse import unquote, urlparse
 
 
 Column = tuple[str, str, bool]
+DEFAULT_LIMIT = 200
 
 
 def db_path(db_url: str) -> Path:
@@ -39,9 +40,15 @@ def inspect(db_url: str) -> dict[str, list[Column]]:
 
 
 def query(db_url: str, sql: str) -> tuple[list[str], list[tuple[object, ...]]]:
+    columns, rows, _ = limited_query(db_url, sql)
+    return columns, rows
+
+
+def limited_query(db_url: str, sql: str, limit: int = DEFAULT_LIMIT) -> tuple[list[str], list[tuple[object, ...]], bool]:
     with sqlite3.connect(read_only_uri(db_url), uri=True) as conn:
         cursor = conn.execute(sql)
-        return [col[0] for col in cursor.description or []], cursor.fetchmany(200)
+        rows = cursor.fetchmany(limit + 1)
+        return [col[0] for col in cursor.description or []], rows[:limit], len(rows) > limit
 
 
 def quote_identifier(name: str) -> str:

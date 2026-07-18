@@ -1,7 +1,10 @@
+import sqlite3
+import tempfile
 import unittest
+from pathlib import Path
 
 from asksql.demo import create_demo_db
-from asksql.sqlite import inspect, preview_table, quote_identifier
+from asksql.sqlite import inspect, limited_query, preview_table, quote_identifier
 
 
 class SqliteTest(unittest.TestCase):
@@ -14,6 +17,19 @@ class SqliteTest(unittest.TestCase):
         columns, rows = preview_table(create_demo_db(), "customers", 1)
         self.assertEqual(columns, ["id", "name", "email", "created_at"])
         self.assertEqual(rows[0][1], "Ada")
+
+    def test_limited_query_reports_truncation(self) -> None:
+        with tempfile.NamedTemporaryFile(prefix="asksql-test-", suffix=".db", delete=False) as file:
+            path = Path(file.name)
+        with sqlite3.connect(path) as conn:
+            conn.execute("create table items(id integer)")
+            conn.executemany("insert into items values (?)", [(1,), (2,)])
+
+        columns, rows, truncated = limited_query(f"sqlite://{path}", "select id from items order by id", limit=1)
+
+        self.assertEqual(columns, ["id"])
+        self.assertEqual(rows, [(1,)])
+        self.assertTrue(truncated)
 
     def test_quote_identifier(self) -> None:
         self.assertEqual(quote_identifier('weird"name'), '"weird""name"')
