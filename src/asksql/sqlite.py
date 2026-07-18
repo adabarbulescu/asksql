@@ -6,9 +6,29 @@ from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 
-Column = tuple[str, str, bool]
 DEFAULT_LIMIT = 200
 MAX_LIMIT = 10_000
+
+
+@dataclass(frozen=True)
+class Column:
+    name: str
+    type: str
+    primary_key: bool
+
+
+@dataclass(frozen=True)
+class ForeignKey:
+    column: str
+    referenced_table: str
+    referenced_column: str
+
+
+@dataclass(frozen=True)
+class TableSchema:
+    name: str
+    columns: list[Column]
+    foreign_keys: list[ForeignKey]
 
 
 @dataclass(frozen=True)
@@ -33,20 +53,41 @@ def read_only_uri(db_url: str) -> str:
 
 def schema(db_url: str) -> str:
     lines = []
-    for table, columns in inspect(db_url).items():
-        lines.append(f"{table}({', '.join(f'{name} {kind}'.strip() for name, kind, _ in columns)})")
+    for table in inspect(db_url).values():
+        lines.append(f"{table.name}(")
+        for column in table.columns:
+            parts = [f"  {column.name} {column.type}".rstrip()]
+            if column.primary_key:
+                parts.append("PRIMARY KEY")
+            if foreign_key := _foreign_key_for_column(table, column.name):
+                parts.append(f"REFERENCES {foreign_key.referenced_table}({foreign_key.referenced_column})")
+            lines.append(" ".join(parts) + ",")
+        lines[-1] = lines[-1].rstrip(",")
+        lines.append(")")
+        lines.append("")
     return "\n".join(lines) or "(empty schema)"
 
 
-def inspect(db_url: str) -> dict[str, list[Column]]:
+def inspect(db_url: str) -> dict[str, TableSchema]:
     with sqlite3.connect(read_only_uri(db_url), uri=True) as conn:
         rows = conn.execute(
             "select name from sqlite_master where type = 'table' and name not like 'sqlite_%' order by name"
         ).fetchall()
         return {
-            table: [(col[1], col[2], bool(col[5])) for col in conn.execute(f"pragma table_info({table!r})").fetchall()]
+            table: TableSchema(
+                table,
+                [Column(col[1], col[2], bool(col[5])) for col in conn.execute(f"pragma table_info({quote_identifier(table)})").fetchall()],
+                [
+                    ForeignKey(row[3], row[2], row[4])
+                    for row in conn.execute(f"pragma foreign_key_list({quote_identifier(table)})").fetchall()
+                ],
+            )
             for (table,) in rows
         }
+
+
+def _foreign_key_for_column(table: TableSchema, column: str) -> ForeignKey | None:
+    return next((foreign_key for foreign_key in table.foreign_keys if foreign_key.column == column), None)
 
 
 def query(db_url: str, sql: str) -> tuple[list[str], list[tuple[object, ...]]]:

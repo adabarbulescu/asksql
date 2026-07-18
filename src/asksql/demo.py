@@ -23,7 +23,7 @@ def create_demo_db() -> str:
 
             create table orders(
                 id integer primary key,
-                customer_id integer not null,
+                customer_id integer not null references customers(id),
                 total real not null,
                 created_at text not null
             );

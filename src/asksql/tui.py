@@ -148,7 +148,7 @@ class AskSqlApp(App[None]):
         except Exception as exc:
             self.call_from_thread(self._set_status, f"Query failed: {exc}")
             return
-        suffix = f"{self.limit}+ rows, limited to {self.limit}" if truncated else f"{len(rows)} rows"
+        suffix = f"row limit reached: {self.limit}" if truncated else f"{len(rows)} rows"
         self.call_from_thread(self._set_status, f"{source} - {suffix}")
         self.call_from_thread(self._set_results, columns, rows)
 
@@ -169,17 +169,22 @@ class AskSqlApp(App[None]):
         tree = self.query_one("#schema", Tree)
         tree.clear()
         tree.root.label = "Schema"
-        for table, columns in inspect(self.db_url).items():
+        for table, table_schema in inspect(self.db_url).items():
             table_node = tree.root.add(table, data=table)
-            for name, kind, primary_key in columns:
-                table_node.add_leaf(f"{name} {kind}{' pk' if primary_key else ''}".rstrip())
+            for column in table_schema.columns:
+                foreign_key = next((fk for fk in table_schema.foreign_keys if fk.column == column.name), None)
+                suffix = f" -> {foreign_key.referenced_table}.{foreign_key.referenced_column}" if foreign_key else ""
+                table_node.add_leaf(f"{column.name} {column.type}{' pk' if column.primary_key else ''}{suffix}".rstrip())
         tree.root.expand()
 
     def _schema_text(self) -> str:
         lines = ["Schema", ""]
-        for table, columns in inspect(self.db_url).items():
+        for table, table_schema in inspect(self.db_url).items():
             lines.append(table)
-            lines.extend(f"  {name} {kind}{' pk' if primary_key else ''}".rstrip() for name, kind, primary_key in columns)
+            for column in table_schema.columns:
+                foreign_key = next((fk for fk in table_schema.foreign_keys if fk.column == column.name), None)
+                suffix = f" -> {foreign_key.referenced_table}.{foreign_key.referenced_column}" if foreign_key else ""
+                lines.append(f"  {column.name} {column.type}{' pk' if column.primary_key else ''}{suffix}".rstrip())
             lines.append("")
         return "\n".join(lines).strip()
 

@@ -71,7 +71,7 @@ class ExportTest(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(stdout.getvalue(), "id\r\n1\r\n")
-        self.assertIn("Results limited to 1 rows", stderr.getvalue())
+        self.assertIn("Result row limit reached: 1", stderr.getvalue())
 
     def test_generated_query_honors_limit(self) -> None:
         stdout = StringIO()
@@ -83,7 +83,7 @@ class ExportTest(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(stdout.getvalue(), "id\r\n1\r\n")
-        self.assertIn("Results limited to 1 rows", stderr.getvalue())
+        self.assertIn("Result row limit reached: 1", stderr.getvalue())
 
     def test_invalid_limit_exits_before_query(self) -> None:
         for value in ["0", "-1", "10001", "nope"]:

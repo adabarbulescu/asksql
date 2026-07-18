@@ -102,7 +102,7 @@ def print_result(result: QueryResult, output_format: str, output: str | None = N
     else:
         sys.stdout.write(text)
     if result.truncated:
-        error_console.print(f"[yellow]Results limited to {result.limit} rows.[/]")
+        error_console.print(f"[yellow]Result row limit reached: {result.limit}.[/]")
     return 0
 
 
@@ -200,9 +200,13 @@ def show_schema(db_url: str) -> int:
     table.add_column("column")
     table.add_column("type", style="green")
     table.add_column("key")
-    for table_name, columns in tables.items():
-        for index, (name, kind, primary_key) in enumerate(columns):
-            table.add_row(table_name if index == 0 else "", name, kind or "-", "pk" if primary_key else "")
+    for table_name, table_schema in tables.items():
+        for index, column in enumerate(table_schema.columns):
+            foreign_key = next((fk for fk in table_schema.foreign_keys if fk.column == column.name), None)
+            key = "pk" if column.primary_key else ""
+            if foreign_key:
+                key = f"{key} references {foreign_key.referenced_table}.{foreign_key.referenced_column}".strip()
+            table.add_row(table_name if index == 0 else "", column.name, column.type or "-", key)
     console.print(table)
     return 0
 
