@@ -1,13 +1,26 @@
 import sqlite3
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 
 from asksql.demo import create_demo_db
+from asksql.models import CancellationToken, QueryCancelledError, QueryTimeoutError
 from asksql.sqlite import DEFAULT_LIMIT, inspect, limited_query, preview_table, query_result, quote_identifier, schema
 
 
 class SqliteTest(unittest.TestCase):
+    EXPENSIVE_SQL = """
+    with recursive nums(n) as (
+        select 1
+        union all
+        select n + 1 from nums where n < 100000000
+    )
+    select sum(a.n + b.n)
+    from nums a, nums b
+    """
+
     def test_inspect_demo_schema(self) -> None:
         tables = inspect(create_demo_db())
         self.assertEqual(tables["customers"].columns[0].name, "id")
@@ -57,6 +70,53 @@ class SqliteTest(unittest.TestCase):
         self.assertEqual(result.limit, 1)
         self.assertEqual(result.rows, [(1,)])
         self.assertTrue(result.truncated)
+
+    def test_query_result_times_out_expensive_query(self) -> None:
+        with self.assertRaises(QueryTimeoutError):
+            query_result(create_demo_db(), self.EXPENSIVE_SQL, timeout=0.001)
+
+    def test_query_result_honors_cancelled_token(self) -> None:
+        token = CancellationToken()
+        token.cancel()
+
+        with self.assertRaises(QueryCancelledError):
+            query_result(create_demo_db(), "select 1", cancellation=token)
+
+    def test_query_result_cancels_running_query(self) -> None:
+        token = CancellationToken()
+        timer = threading.Timer(0.01, token.cancel)
+        timer.start()
+        try:
+            with self.assertRaises(QueryCancelledError):
+                query_result(create_demo_db(), self.EXPENSIVE_SQL, timeout=10, cancellation=token)
+        finally:
+            timer.cancel()
+
+    def test_query_result_cancel_wins_over_near_timeout(self) -> None:
+        token = CancellationToken()
+        timer = threading.Timer(0.01, token.cancel)
+        timer.start()
+        try:
+            with self.assertRaises(QueryCancelledError):
+                query_result(create_demo_db(), self.EXPENSIVE_SQL, timeout=0.02, cancellation=token)
+        finally:
+            timer.cancel()
+
+    def test_query_result_keeps_regular_sqlite_errors(self) -> None:
+        with self.assertRaises(sqlite3.OperationalError):
+            query_result(create_demo_db(), "select missing from nowhere")
+
+    def test_query_result_works_after_timeout_and_cancel(self) -> None:
+        token = CancellationToken()
+        token.cancel()
+        with self.assertRaises(QueryCancelledError):
+            query_result(create_demo_db(), "select 1", cancellation=token)
+        with self.assertRaises(QueryTimeoutError):
+            query_result(create_demo_db(), self.EXPENSIVE_SQL, timeout=0.001)
+
+        result = query_result(create_demo_db(), "select 1")
+
+        self.assertEqual(result.rows, [(1,)])
 
     def test_quote_identifier(self) -> None:
         self.assertEqual(quote_identifier('weird"name'), '"weird""name"')

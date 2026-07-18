@@ -1,42 +1,16 @@
 from __future__ import annotations
 
 import sqlite3
-from dataclasses import dataclass
+import time
 from pathlib import Path
 from urllib.parse import unquote, urlparse
+
+from asksql.models import CancellationToken, Column, ForeignKey, QueryCancelledError, QueryResult, QueryTimeoutError, TableSchema
 
 
 DEFAULT_LIMIT = 200
 MAX_LIMIT = 10_000
-
-
-@dataclass(frozen=True)
-class Column:
-    name: str
-    type: str
-    primary_key: bool
-
-
-@dataclass(frozen=True)
-class ForeignKey:
-    column: str
-    referenced_table: str
-    referenced_column: str
-
-
-@dataclass(frozen=True)
-class TableSchema:
-    name: str
-    columns: list[Column]
-    foreign_keys: list[ForeignKey]
-
-
-@dataclass(frozen=True)
-class QueryResult:
-    columns: list[str]
-    rows: list[tuple[object, ...]]
-    truncated: bool
-    limit: int
+DEFAULT_TIMEOUT = 30.0
 
 
 def db_path(db_url: str) -> Path:
@@ -95,16 +69,61 @@ def query(db_url: str, sql: str) -> tuple[list[str], list[tuple[object, ...]]]:
     return columns, rows
 
 
-def limited_query(db_url: str, sql: str, limit: int = DEFAULT_LIMIT) -> tuple[list[str], list[tuple[object, ...]], bool]:
-    result = query_result(db_url, sql, limit)
+def limited_query(
+    db_url: str,
+    sql: str,
+    limit: int = DEFAULT_LIMIT,
+    timeout: float | None = DEFAULT_TIMEOUT,
+    cancellation: CancellationToken | None = None,
+) -> tuple[list[str], list[tuple[object, ...]], bool]:
+    result = query_result(db_url, sql, limit, timeout, cancellation)
     return result.columns, result.rows, result.truncated
 
 
-def query_result(db_url: str, sql: str, limit: int = DEFAULT_LIMIT) -> QueryResult:
+def query_result(
+    db_url: str,
+    sql: str,
+    limit: int = DEFAULT_LIMIT,
+    timeout: float | None = DEFAULT_TIMEOUT,
+    cancellation: CancellationToken | None = None,
+) -> QueryResult:
+    if cancellation and cancellation.cancelled:
+        raise QueryCancelledError("query cancelled")
+    deadline = time.monotonic() + timeout if timeout is not None else None
+    interrupt_reason: str | None = None
+
     with sqlite3.connect(read_only_uri(db_url), uri=True) as conn:
-        cursor = conn.execute(sql)
-        rows = cursor.fetchmany(limit + 1)
-        return QueryResult([col[0] for col in cursor.description or []], rows[:limit], len(rows) > limit, limit)
+        remove_interrupt = cancellation.add_callback(conn.interrupt) if cancellation else None
+
+        def progress() -> int:
+            nonlocal interrupt_reason
+            if cancellation and cancellation.cancelled:
+                interrupt_reason = "cancelled"
+                return 1
+            if deadline is not None and time.monotonic() >= deadline:
+                interrupt_reason = "timeout"
+                return 1
+            return 0
+
+        conn.set_progress_handler(progress, 1000)
+        try:
+            cursor = conn.execute(sql)
+            rows = cursor.fetchmany(limit + 1)
+            return QueryResult([col[0] for col in cursor.description or []], rows[:limit], len(rows) > limit, limit)
+        except sqlite3.OperationalError as exc:
+            if cancellation and cancellation.cancelled:
+                raise QueryCancelledError("query cancelled") from exc
+            if deadline is not None and time.monotonic() >= deadline:
+                raise QueryTimeoutError(f"query timed out after {timeout:g} seconds") from exc
+            if interrupt_reason == "cancelled":
+                raise QueryCancelledError("query cancelled") from exc
+            if interrupt_reason == "timeout":
+                raise QueryTimeoutError(f"query timed out after {timeout:g} seconds") from exc
+            raise
+        finally:
+            conn.set_progress_handler(None, 0)
+            if remove_interrupt:
+                remove_interrupt()
 
 
 def quote_identifier(name: str) -> str:

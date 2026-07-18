@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from asksql.cli import main, print_result
 from asksql.export import format_result
-from asksql.sqlite import QueryResult
+from asksql.models import QueryResult
 
 
 class ExportTest(unittest.TestCase):
@@ -23,7 +23,7 @@ class ExportTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "customers.json"
 
-            exit_code = main(["--yes", "--format", "json", "--output", str(output), "run", "demo select id, name from customers order by id limit 1"])
+            exit_code = main(["--yes", "--format", "json", "--output", str(output), "run", "demo", "select id, name from customers order by id limit 1"])
 
             self.assertEqual(exit_code, 0)
             self.assertEqual(json.loads(output.read_text()), [{"id": 1, "name": "Ada"}])
@@ -43,7 +43,7 @@ class ExportTest(unittest.TestCase):
         stderr = StringIO()
 
         with redirect_stdout(stdout), redirect_stderr(stderr):
-            exit_code = main(["--yes", "--format", "csv", "run", "demo select id from customers order by id limit 1"])
+            exit_code = main(["--yes", "--format", "csv", "run", "demo", "select id from customers order by id limit 1"])
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(stdout.getvalue(), "id\r\n1\r\n")
@@ -53,7 +53,7 @@ class ExportTest(unittest.TestCase):
         stdout = StringIO()
         stderr = StringIO()
 
-        with patch("asksql.cli.generate_sql", return_value="select id from customers order by id limit 1"):
+        with patch("asksql.service.generate_sql", return_value="select id from customers order by id limit 1"):
             with redirect_stdout(stdout), redirect_stderr(stderr):
                 exit_code = main(["--yes", "--show-schema", "--format", "csv", "demo", "show customers"])
 
@@ -67,7 +67,7 @@ class ExportTest(unittest.TestCase):
         stderr = StringIO()
 
         with redirect_stdout(stdout), redirect_stderr(stderr):
-            exit_code = main(["--yes", "--limit", "1", "--format", "csv", "run", "demo select id from customers order by id"])
+            exit_code = main(["--yes", "--limit", "1", "--format", "csv", "run", "demo", "select id from customers order by id"])
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(stdout.getvalue(), "id\r\n1\r\n")
@@ -77,28 +77,63 @@ class ExportTest(unittest.TestCase):
         stdout = StringIO()
         stderr = StringIO()
 
-        with patch("asksql.cli.generate_sql", return_value="select id from customers order by id"):
+        with patch("asksql.service.generate_sql", return_value="select id from customers order by id"):
             with redirect_stdout(stdout), redirect_stderr(stderr):
-                exit_code = main(["--yes", "--limit", "1", "--format", "csv", "demo", "show customers"])
+                exit_code = main(["--yes", "--limit", "1", "--format", "csv", "ask", "demo", "show customers"])
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(stdout.getvalue(), "id\r\n1\r\n")
         self.assertIn("Result row limit reached: 1", stderr.getvalue())
 
+    def test_legacy_ask_form_still_works(self) -> None:
+        stdout = StringIO()
+
+        with patch("asksql.service.generate_sql", return_value="select id from customers order by id limit 1"):
+            with redirect_stdout(stdout), redirect_stderr(StringIO()):
+                exit_code = main(["--yes", "--format", "csv", "demo", "show customers"])
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stdout.getvalue(), "id\r\n1\r\n")
+
     def test_invalid_limit_exits_before_query(self) -> None:
         for value in ["0", "-1", "10001", "nope"]:
             with self.subTest(value=value):
-                with patch("asksql.cli.query_result") as query:
+                with patch("asksql.service.query_result") as query:
                     with self.assertRaises(SystemExit):
-                        main(["--yes", "--limit", value, "run", "demo select id from customers"])
+                        main(["--yes", "--limit", value, "run", "demo", "select id from customers"])
                 query.assert_not_called()
+
+    def test_invalid_timeout_exits_before_query(self) -> None:
+        for value in ["0", "-1", "nan", "inf", "nope"]:
+            with self.subTest(value=value):
+                with patch("asksql.service.query_result") as query:
+                    with self.assertRaises(SystemExit):
+                        main(["--yes", "--timeout", value, "run", "demo", "select id from customers"])
+                query.assert_not_called()
+
+    def test_run_passes_timeout_to_query(self) -> None:
+        with patch("asksql.service.query_result", return_value=QueryResult(["id"], [(1,)], False, 200)) as query:
+            exit_code = main(["--yes", "--timeout", "0.5", "run", "demo", "select id from customers"])
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(query.call_args.args[3], 0.5)
+
+    def test_timeout_exit_code(self) -> None:
+        sql = (
+            "with recursive nums(n) as (select 1 union all select n + 1 from nums where n < 100000000) "
+            "select sum(a.n + b.n) from nums a, nums b"
+        )
+
+        exit_code = main(["--yes", "--timeout", "0.001", "run", "demo", sql])
+
+        self.assertEqual(exit_code, 124)
 
     def test_refuses_to_overwrite_without_force(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "customers.csv"
             output.write_text("existing")
 
-            exit_code = main(["--yes", "--format", "csv", "--output", str(output), "run", "demo select id from customers"])
+            exit_code = main(["--yes", "--format", "csv", "--output", str(output), "run", "demo", "select id from customers"])
 
             self.assertEqual(exit_code, 1)
             self.assertEqual(output.read_text(), "existing")
@@ -108,7 +143,7 @@ class ExportTest(unittest.TestCase):
             output = Path(directory) / "customers.csv"
             output.write_text("existing")
 
-            exit_code = main(["--yes", "--force", "--format", "csv", "--output", str(output), "run", "demo select id from customers order by id limit 1"])
+            exit_code = main(["--yes", "--force", "--format", "csv", "--output", str(output), "run", "demo", "select id from customers order by id limit 1"])
 
             self.assertEqual(exit_code, 0)
             self.assertEqual(output.read_text(), "id\n1\n")
@@ -122,7 +157,7 @@ class ExportTest(unittest.TestCase):
     def test_rejects_output_for_table_format(self) -> None:
         stdout = StringIO()
         with redirect_stdout(stdout):
-            exit_code = main(["--yes", "--output", "ignored.csv", "run", "demo select id from customers"])
+            exit_code = main(["--yes", "--output", "ignored.csv", "run", "demo", "select id from customers"])
 
         self.assertEqual(exit_code, 1)
         self.assertEqual(stdout.getvalue(), "")
@@ -130,7 +165,7 @@ class ExportTest(unittest.TestCase):
     def test_rejects_force_without_output(self) -> None:
         stdout = StringIO()
         with redirect_stdout(stdout):
-            exit_code = main(["--yes", "--force", "--format", "csv", "run", "demo select id from customers"])
+            exit_code = main(["--yes", "--force", "--format", "csv", "run", "demo", "select id from customers"])
 
         self.assertEqual(exit_code, 1)
         self.assertEqual(stdout.getvalue(), "")

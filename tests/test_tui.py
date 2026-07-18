@@ -1,8 +1,7 @@
 import unittest
-from unittest.mock import patch
-
 from asksql.demo import create_demo_db
-from asksql.sqlite import DEFAULT_LIMIT, preview_table
+from asksql.models import CancellationToken, ExecutionStatus, QueryExecution, QueryResult
+from asksql.sqlite import DEFAULT_LIMIT, DEFAULT_TIMEOUT, preview_table
 from asksql.tui import AskSqlApp
 
 
@@ -32,23 +31,12 @@ class TuiTest(unittest.IsolatedAsyncioTestCase):
             editor = app.query_one("#sql")
             self.assertEqual(editor.text, "select 1")
 
-    async def test_tui_generates_sql_without_running_it(self) -> None:
-        app = AskSqlApp(create_demo_db(), "ollama:qwen2.5-coder:7b")
-        ran_sql = False
+    async def test_tui_uses_query_service(self) -> None:
+        db_url = create_demo_db()
+        app = AskSqlApp(db_url, "ollama:qwen2.5-coder:7b")
 
-        def run_sql(*_: object) -> None:
-            nonlocal ran_sql
-            ran_sql = True
-
-        app.run_sql = run_sql  # type: ignore[method-assign]
-        async with app.run_test() as pilot:
-            with patch("asksql.tui.generate_sql", return_value="select * from customers"):
-                app.ask("show customers")
-                await pilot.pause(0.2)
-
-            editor = app.query_one("#sql")
-            self.assertEqual(editor.text, "select * from customers")
-            self.assertFalse(ran_sql)
+        self.assertEqual(app.service.db_url, db_url)
+        self.assertEqual(app.service.model, "ollama:qwen2.5-coder:7b")
 
     async def test_tui_sets_status(self) -> None:
         app = AskSqlApp(create_demo_db(), "ollama:qwen2.5-coder:7b")
@@ -66,6 +54,75 @@ class TuiTest(unittest.IsolatedAsyncioTestCase):
         app = AskSqlApp(create_demo_db(), "ollama:qwen2.5-coder:7b")
 
         self.assertEqual(app.limit, DEFAULT_LIMIT)
+
+    async def test_tui_stores_timeout(self) -> None:
+        app = AskSqlApp(create_demo_db(), "ollama:qwen2.5-coder:7b", timeout=0.5)
+
+        self.assertEqual(app.timeout, 0.5)
+
+    async def test_tui_default_timeout(self) -> None:
+        app = AskSqlApp(create_demo_db(), "ollama:qwen2.5-coder:7b")
+
+        self.assertEqual(app.timeout, DEFAULT_TIMEOUT)
+
+    async def test_tui_cancel_without_running_query(self) -> None:
+        app = AskSqlApp(create_demo_db(), "ollama:qwen2.5-coder:7b")
+        async with app.run_test() as pilot:
+            app.action_cancel_query()
+            await pilot.pause()
+            self.assertIsNotNone(app.query_one("#status"))
+
+    async def test_tui_does_not_bind_ctrl_z_to_cancel(self) -> None:
+        app = AskSqlApp(create_demo_db(), "ollama:qwen2.5-coder:7b")
+
+        self.assertNotIn("ctrl+z", {binding[0] for binding in app.BINDINGS})
+
+    async def test_tui_blocks_second_run_while_query_active(self) -> None:
+        app = AskSqlApp(create_demo_db(), "ollama:qwen2.5-coder:7b")
+        token = CancellationToken()
+        app._cancellation = token
+        async with app.run_test() as pilot:
+            app.action_run_editor_sql()
+            await pilot.pause()
+
+            self.assertIs(app._cancellation, token)
+
+    async def test_tui_marks_query_active_before_worker_runs(self) -> None:
+        app = AskSqlApp(create_demo_db(), "ollama:qwen2.5-coder:7b")
+        calls = []
+
+        def fake_execute(sql: str, source: str, execution_id: int, cancellation: CancellationToken) -> None:
+            calls.append((sql, source, execution_id, cancellation))
+
+        app._execute_sql = fake_execute  # type: ignore[method-assign]
+        async with app.run_test() as pilot:
+            app.run_sql("select 1")
+            await pilot.pause()
+
+            self.assertIsNotNone(app._cancellation)
+            self.assertEqual(app._execution_id, 1)
+            self.assertEqual(calls[0][0], "select 1")
+            self.assertIs(calls[0][3], app._cancellation)
+
+    async def test_tui_ignores_stale_execution_result(self) -> None:
+        app = AskSqlApp(create_demo_db(), "ollama:qwen2.5-coder:7b")
+        async with app.run_test() as pilot:
+            app._execution_id = 2
+            execution = QueryExecution("select 1", QueryResult(["id"], [(1,)], False, 200), 0, ExecutionStatus.SUCCEEDED, None)
+            app._finish_sql(1, CancellationToken(), "Manual SQL", execution)
+            await pilot.pause()
+
+            table = app.query_one("#results")
+            self.assertEqual(table.row_count, 0)
+
+    async def test_tui_unmount_cancels_running_query(self) -> None:
+        app = AskSqlApp(create_demo_db(), "ollama:qwen2.5-coder:7b")
+        token = CancellationToken()
+        app._cancellation = token
+
+        app.on_unmount()
+
+        self.assertTrue(token.cancelled)
 
     async def test_tui_focus_actions(self) -> None:
         app = AskSqlApp(create_demo_db(), "ollama:qwen2.5-coder:7b")

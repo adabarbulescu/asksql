@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 from pathlib import Path
 
@@ -12,17 +13,66 @@ from rich.table import Table
 
 from asksql.demo import create_demo_db
 from asksql.export import format_result
-from asksql.llm import generate_sql, ollama_models
-from asksql.safety import is_read_only
+from asksql.llm import ollama_models
+from asksql.models import ExecutionStatus, QueryExecution, QueryResult
+from asksql.service import QueryService
 from asksql.sql import pretty_sql
-from asksql.sqlite import DEFAULT_LIMIT, MAX_LIMIT, QueryResult, inspect, query_result, schema
+from asksql.sqlite import DEFAULT_LIMIT, DEFAULT_TIMEOUT, MAX_LIMIT, inspect, schema
 from asksql.tui import run_tui
 
 console = Console()
 error_console = Console(stderr=True)
+COMMANDS = {"ask", "run", "tui", "schema", "models"}
+VALUE_OPTIONS = {"--model", "--format", "--output", "--limit", "--timeout"}
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    parser = build_legacy_parser() if _is_legacy_ask(argv) else build_parser()
+    args = parser.parse_args(argv)
+    if not validate_output_options(args.format, args.output, args.force):
+        return 1
+    return args.func(args)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = base_parser()
+    subparsers = parser.add_subparsers(dest="command")
+
+    ask = subparsers.add_parser("ask", help="generate SQL from a question and optionally run it")
+    ask.add_argument("database")
+    ask.add_argument("question", nargs=argparse.REMAINDER)
+    ask.set_defaults(func=command_ask)
+
+    run = subparsers.add_parser("run", help="run read-only SQL")
+    run.add_argument("database")
+    run.add_argument("sql", nargs=argparse.REMAINDER)
+    run.set_defaults(func=command_run)
+
+    tui = subparsers.add_parser("tui", help="open the terminal UI")
+    tui.add_argument("database", nargs="?", default="demo")
+    tui.set_defaults(func=command_tui)
+
+    schema_command = subparsers.add_parser("schema", help="show database schema")
+    schema_command.add_argument("database", nargs="?", default="demo")
+    schema_command.set_defaults(func=command_schema)
+
+    models = subparsers.add_parser("models", help="list Ollama models")
+    models.set_defaults(func=command_models)
+
+    parser.set_defaults(func=command_help)
+    return parser
+
+
+def build_legacy_parser() -> argparse.ArgumentParser:
+    parser = base_parser()
+    parser.add_argument("database", nargs="?")
+    parser.add_argument("question", nargs=argparse.REMAINDER)
+    parser.set_defaults(func=command_ask)
+    return parser
+
+
+def base_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Ask your database questions from the terminal.")
     parser.add_argument("--model", default="ollama:qwen2.5-coder:7b", help="ollama:name or openai:name")
     parser.add_argument("--dry-run", action="store_true", help="show SQL without running it")
@@ -30,37 +80,69 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", help="write csv/json/markdown output to a file")
     parser.add_argument("--force", action="store_true", help="overwrite --output if it exists")
     parser.add_argument("--limit", type=result_limit, default=DEFAULT_LIMIT, help=f"maximum result rows, 1-{MAX_LIMIT}")
+    parser.add_argument("--timeout", type=query_timeout, default=DEFAULT_TIMEOUT, help="SQLite execution timeout in seconds")
     parser.add_argument("-y", "--yes", action="store_true", help="run read-only SQL without prompting")
     parser.add_argument("--show-schema", action="store_true", help="print the schema sent to the model")
-    parser.add_argument("db_url", nargs="?", help="database URL, demo, models, schema, run, or tui")
-    parser.add_argument("question", nargs=argparse.REMAINDER, help="question, schema DB URL, or SQL")
-    args = parser.parse_args(argv)
-    text = " ".join(args.question).strip()
-    if not validate_output_options(args.format, args.output, args.force):
-        return 1
+    return parser
 
-    if args.db_url == "models":
-        return show_models()
-    if args.db_url == "schema":
-        return show_schema(text or "demo")
-    if args.db_url == "run":
-        return run_sql_command(text, args.yes, args.format, args.output, args.force, args.limit)
-    if args.db_url == "tui":
-        run_tui(create_demo_db() if not text or text == "demo" else text, args.model, args.limit)
+
+def _is_legacy_ask(argv: list[str]) -> bool:
+    first = _first_positional(argv)
+    return bool(first and first not in COMMANDS)
+
+
+def _first_positional(argv: list[str]) -> str | None:
+    index = 0
+    while index < len(argv):
+        arg = argv[index]
+        if arg == "--":
+            return argv[index + 1] if index + 1 < len(argv) else None
+        if arg in VALUE_OPTIONS:
+            index += 2
+            continue
+        if any(arg.startswith(f"{option}=") for option in VALUE_OPTIONS):
+            index += 1
+            continue
+        if arg.startswith("-"):
+            index += 1
+            continue
+        return arg
+    return None
+
+
+def command_help(args: argparse.Namespace) -> int:
+    build_parser().print_help()
+    return 0
+
+
+def command_models(args: argparse.Namespace) -> int:
+    return show_models()
+
+
+def command_schema(args: argparse.Namespace) -> int:
+    return show_schema(args.database)
+
+
+def command_tui(args: argparse.Namespace) -> int:
+    run_tui(resolve_db_url(args.database), args.model, args.limit, args.timeout)
+    return 0
+
+
+def command_ask(args: argparse.Namespace) -> int:
+    question = " ".join(args.question).strip()
+    if not args.database or not question:
+        build_parser().print_help()
         return 0
 
-    if not args.db_url or not text:
-        parser.print_help()
-        return 0
-
-    db_url = create_demo_db() if args.db_url == "demo" else args.db_url
+    db_url = resolve_db_url(args.database)
+    service = QueryService(db_url, args.model)
     try:
         db_schema = schema(db_url)
         sql_console = console if args.format == "table" and not args.output else error_console
         if args.show_schema:
             sql_console.print(Panel(db_schema, title="Schema", border_style="blue"))
         with sql_console.status(f"Asking {args.model}...", spinner="dots"):
-            sql = generate_sql(args.model, db_schema, text)
+            sql = service.generate(question).sql
     except Exception as exc:
         error_console.print(f"[red]Error:[/] {exc}")
         return 1
@@ -69,18 +151,22 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.dry_run:
         return 0
-    if not is_read_only(sql):
-        error_console.print("[red]Refusing to run non-read-only SQL.[/]")
-        return 2
     if not args.yes and not confirm_run():
         return 1
 
-    try:
-        result = query_result(db_url, sql, args.limit)
-    except Exception as exc:
-        error_console.print(f"[red]Query failed:[/] {exc}")
+    execution = service.execute(sql, limit=args.limit, timeout=args.timeout)
+    if execution.status != ExecutionStatus.SUCCEEDED:
+        return print_execution_error(execution)
+    assert execution.result is not None
+    return print_result(execution.result, args.format, args.output, args.force)
+
+
+def command_run(args: argparse.Namespace) -> int:
+    sql = " ".join(args.sql).strip()
+    if not args.database or not sql:
+        console.print("[red]Usage:[/] asksql run <db-url|demo> \"select ...\"")
         return 1
-    return print_result(result, args.format, args.output, args.force)
+    return run_sql(args.database, sql, args.yes, args.format, args.output, args.force, args.limit, args.timeout)
 
 
 def print_result(result: QueryResult, output_format: str, output: str | None = None, force: bool = False) -> int:
@@ -106,6 +192,17 @@ def print_result(result: QueryResult, output_format: str, output: str | None = N
     return 0
 
 
+def print_execution_error(execution: QueryExecution) -> int:
+    if execution.status == ExecutionStatus.REFUSED:
+        error_console.print(f"[red]{execution.error}[/]")
+        return 2
+    if execution.status in {ExecutionStatus.TIMED_OUT, ExecutionStatus.CANCELLED}:
+        error_console.print(f"[red]{execution.error}[/]")
+        return 124 if execution.status == ExecutionStatus.TIMED_OUT else 130
+    error_console.print(f"[red]Query failed:[/] {execution.error}")
+    return 1
+
+
 def validate_output_options(output_format: str, output: str | None = None, force: bool = False) -> bool:
     if output_format == "table" and output:
         error_console.print("[red]--output requires --format csv, json, or markdown.[/]")
@@ -124,6 +221,16 @@ def result_limit(value: str) -> int:
     if not 1 <= limit <= MAX_LIMIT:
         raise argparse.ArgumentTypeError(f"limit must be between 1 and {MAX_LIMIT}")
     return limit
+
+
+def query_timeout(value: str) -> float:
+    try:
+        timeout = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("timeout must be a number") from exc
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise argparse.ArgumentTypeError("timeout must be a finite number greater than 0")
+    return timeout
 
 
 def print_table(result: QueryResult) -> None:
@@ -147,26 +254,41 @@ def run_sql_command(
     output: str | None = None,
     force: bool = False,
     limit: int = DEFAULT_LIMIT,
+    timeout: float | None = DEFAULT_TIMEOUT,
 ) -> int:
     target, _, sql = text.partition(" ")
     if not target or not sql:
         console.print("[red]Usage:[/] asksql run <db-url|demo> \"select ...\"")
         return 1
-    db_url = create_demo_db() if target == "demo" else target
+    return run_sql(target, sql, yes, output_format, output, force, limit, timeout)
+
+
+def run_sql(
+    database: str,
+    sql: str,
+    yes: bool,
+    output_format: str = "table",
+    output: str | None = None,
+    force: bool = False,
+    limit: int = DEFAULT_LIMIT,
+    timeout: float | None = DEFAULT_TIMEOUT,
+) -> int:
+    db_url = resolve_db_url(database)
+    service = QueryService(db_url)
     sql = pretty_sql(sql)
     sql_console = console if output_format == "table" and not output else error_console
     sql_console.print(Panel(Syntax(sql, "sql", theme="ansi_dark"), title="SQL", border_style="green"))
-    if not is_read_only(sql):
-        error_console.print("[red]Refusing to run non-read-only SQL.[/]")
-        return 2
     if not yes and not confirm_run():
         return 1
-    try:
-        result = query_result(db_url, sql, limit)
-    except Exception as exc:
-        error_console.print(f"[red]Query failed:[/] {exc}")
-        return 1
-    return print_result(result, output_format, output, force)
+    execution = service.execute(sql, limit=limit, timeout=timeout)
+    if execution.status != ExecutionStatus.SUCCEEDED:
+        return print_execution_error(execution)
+    assert execution.result is not None
+    return print_result(execution.result, output_format, output, force)
+
+
+def resolve_db_url(database: str) -> str:
+    return create_demo_db() if database == "demo" else database
 
 
 def confirm_run() -> bool:

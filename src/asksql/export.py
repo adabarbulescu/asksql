@@ -4,7 +4,7 @@ import csv
 import json
 from io import StringIO
 
-from asksql.sqlite import QueryResult
+from asksql.models import QueryResult
 
 
 ExportFormat = str

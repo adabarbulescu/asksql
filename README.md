@@ -5,7 +5,7 @@ Ask your database questions from the terminal.
 Local models by default. API models when you want them. SQL shown before it runs.
 
 ```bash
-asksql sqlite://app.db "Which customers spent the most last month?"
+asksql ask sqlite://app.db "Which customers spent the most last month?"
 ```
 
 `asksql` starts narrow: SQLite, Ollama, OpenAI-compatible APIs, and read-only SQL.
@@ -23,7 +23,7 @@ pip install -e .
 Try the built-in demo:
 
 ```bash
-asksql --yes demo "which customers spent the most?"
+asksql --yes ask demo "which customers spent the most?"
 ```
 
 List local Ollama models:
@@ -48,16 +48,23 @@ Export query results:
 
 ```bash
 asksql --yes --format csv --output customers.csv run demo "select * from customers"
-asksql --yes --format json demo "show all customers"
-asksql --yes --format markdown demo "orders by customer"
+asksql --yes --format json ask demo "show all customers"
+asksql --yes --format markdown ask demo "orders by customer"
 ```
 
 Limit returned rows:
 
 ```bash
-asksql --limit 500 demo "show customers"
+asksql --limit 500 ask demo "show customers"
 asksql --limit 1000 --format csv run demo "select * from customers"
 asksql --limit 1000 tui demo
+```
+
+Set a SQLite execution timeout:
+
+```bash
+asksql --timeout 10 ask demo "show customers"
+asksql --timeout 5 run demo "select * from customers"
 ```
 
 Open the terminal UI:
@@ -66,30 +73,36 @@ Open the terminal UI:
 asksql tui demo
 ```
 
-The TUI keeps schema and AI/manual SQL controls on top, with full-width results below. Use `Tab` / `Shift+Tab` to move between panes, `Enter` to generate SQL or preview a selected table, and `Ctrl+Enter` to run reviewed SQL.
+The TUI keeps schema and AI/manual SQL controls on top, with full-width results below. Use `Tab` / `Shift+Tab` to move between panes, `Enter` to generate SQL or preview a selected table, `Ctrl+Enter` to run reviewed SQL, and `Ctrl+C` to cancel a running query.
 
 Run with local Ollama:
 
 ```bash
-asksql sqlite://app.db "show the newest 10 users"
+asksql ask sqlite://app.db "show the newest 10 users"
 ```
 
 Use a specific Ollama model:
 
 ```bash
-asksql --model ollama:qwen2.5-coder:7b sqlite://app.db "top customers by revenue"
+asksql --model ollama:qwen2.5-coder:7b ask sqlite://app.db "top customers by revenue"
 ```
 
 Use an OpenAI-compatible API:
 
 ```bash
-OPENAI_API_KEY=... asksql --model openai:gpt-4.1-mini sqlite://app.db "weekly signups"
+OPENAI_API_KEY=... asksql --model openai:gpt-4.1-mini ask sqlite://app.db "weekly signups"
 ```
 
 Preview SQL without running it:
 
 ```bash
-asksql --dry-run sqlite://app.db "users created yesterday"
+asksql --dry-run ask sqlite://app.db "users created yesterday"
+```
+
+The older shorthand still works for now:
+
+```bash
+asksql demo "which customers spent the most?"
 ```
 
 ## Defaults
@@ -98,6 +111,7 @@ asksql --dry-run sqlite://app.db "users created yesterday"
 - Asks before executing generated SQL. Use `--yes` to skip the prompt.
 - Shows when results are limited to 200 rows.
 - Returns at most 200 rows by default. Use `--limit` to choose 1-10000 returned rows.
+- Stops SQLite execution after 30 seconds by default. Use `--timeout` to change that deadline.
 - Runs only read-only statements.
 - Uses Ollama first: `ollama:qwen2.5-coder:7b`.
 - Uses `OPENAI_BASE_URL` when set, otherwise `https://api.openai.com/v1`.
