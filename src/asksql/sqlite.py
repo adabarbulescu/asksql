@@ -1,11 +1,21 @@
 from __future__ import annotations
 
 import sqlite3
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 
 Column = tuple[str, str, bool]
+DEFAULT_LIMIT = 200
+
+
+@dataclass(frozen=True)
+class QueryResult:
+    columns: list[str]
+    rows: list[tuple[object, ...]]
+    truncated: bool
+    limit: int
 
 
 def db_path(db_url: str) -> Path:
@@ -39,9 +49,15 @@ def inspect(db_url: str) -> dict[str, list[Column]]:
 
 
 def query(db_url: str, sql: str) -> tuple[list[str], list[tuple[object, ...]]]:
+    result = query_result(db_url, sql)
+    return result.columns, result.rows
+
+
+def query_result(db_url: str, sql: str, limit: int = DEFAULT_LIMIT) -> QueryResult:
     with sqlite3.connect(read_only_uri(db_url), uri=True) as conn:
         cursor = conn.execute(sql)
-        return [col[0] for col in cursor.description or []], cursor.fetchmany(200)
+        rows = cursor.fetchmany(limit + 1)
+        return QueryResult([col[0] for col in cursor.description or []], rows[:limit], len(rows) > limit, limit)
 
 
 def quote_identifier(name: str) -> str:
