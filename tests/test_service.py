@@ -1,7 +1,7 @@
 import unittest
 
 from asksql.demo import create_demo_db
-from asksql.models import ExecutionStatus, QueryExecution, QueryResult
+from asksql.models import CancellationToken, ExecutionStatus, QueryExecution, QueryResult
 from asksql.service import QueryService
 
 
@@ -40,10 +40,26 @@ class QueryServiceTest(unittest.TestCase):
             QueryExecution("select 1", None, 0, ExecutionStatus.SUCCEEDED, None)
         with self.assertRaises(ValueError):
             QueryExecution("select 1", None, 0, ExecutionStatus.FAILED, None)
+        with self.assertRaises(ValueError):
+            QueryExecution("select 1", QueryResult(["1"], [(1,)], False, 200), 0, ExecutionStatus.SUCCEEDED, "oops")
+        with self.assertRaises(ValueError):
+            QueryExecution("select 1", QueryResult(["1"], [(1,)], False, 200), 0, ExecutionStatus.FAILED, "failed")
+        with self.assertRaises(ValueError):
+            QueryExecution("select 1", QueryResult(["1"], [(1,)], False, 200), -1, ExecutionStatus.SUCCEEDED, None)
 
         execution = QueryExecution("select 1", QueryResult(["1"], [(1,)], False, 200), 0, ExecutionStatus.SUCCEEDED, None)
 
         self.assertEqual(execution.status, ExecutionStatus.SUCCEEDED)
+
+    def test_cancellation_token_cancel_is_idempotent(self) -> None:
+        token = CancellationToken()
+        calls = []
+        token.add_callback(lambda: calls.append("cancelled"))
+
+        token.cancel()
+        token.cancel()
+
+        self.assertEqual(calls, ["cancelled"])
 
 
 if __name__ == "__main__":

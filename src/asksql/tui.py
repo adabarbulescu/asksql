@@ -80,6 +80,7 @@ class AskSqlApp(App[None]):
         self.service = QueryService(db_url, model)
         self._cancellation: CancellationToken | None = None
         self._execution_id = 0
+        self._generation_id = 0
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -136,17 +137,37 @@ class AskSqlApp(App[None]):
         self._cancellation.cancel()
         self._set_status("Cancelling query...")
 
-    @work(thread=True)
     def ask(self, question: str) -> None:
-        self.call_from_thread(self._set_status, f"Asking {self.model}: {question}")
+        if self._cancellation:
+            self._set_status("A query is already running. Press Ctrl+C to cancel it.")
+            return
+        generation_id = self._next_generation_id()
+        self._set_status(f"Asking {self.model}: {question}")
+        self._ask(question, generation_id)
+
+    @work(thread=True)
+    def _ask(self, question: str, generation_id: int) -> None:
         try:
             sql = self.service.generate(question).sql
         except Exception as exc:
-            self.call_from_thread(self._set_status, f"Error: {exc}")
+            self.call_from_thread(self._finish_generation, generation_id, None, str(exc))
             return
-        self.call_from_thread(self._set_sql, sql)
-        self.call_from_thread(self._set_status, "Generated SQL. Review or edit it, then press Ctrl+Enter to run.")
-        self.call_from_thread(self.action_focus_sql)
+        self.call_from_thread(self._finish_generation, generation_id, sql, None)
+
+    def _next_generation_id(self) -> int:
+        self._generation_id += 1
+        return self._generation_id
+
+    def _finish_generation(self, generation_id: int, sql: str | None, error: str | None) -> None:
+        if generation_id != self._generation_id:
+            return
+        if error:
+            self._set_status(f"Error: {error}")
+            return
+        assert sql is not None
+        self._set_sql(sql)
+        self._set_status("Generated SQL. Review or edit it, then press Ctrl+Enter to run.")
+        self.action_focus_sql()
 
     def run_sql(self, sql: str, source: str = "Manual SQL") -> None:
         cancellation = CancellationToken()
@@ -191,18 +212,42 @@ class AskSqlApp(App[None]):
         if self._cancellation:
             self._cancellation.cancel()
 
-    @work(thread=True)
     def preview(self, table: str) -> None:
+        if self._cancellation:
+            self._set_status("A query is already running. Press Ctrl+C to cancel it.")
+            return
+        execution_id = self._execution_id
+        self._set_status(f"Previewing table: {table}")
+        self._preview(table, execution_id)
+
+    @work(thread=True)
+    def _preview(self, table: str, execution_id: int) -> None:
         sql = f"select * from {quote_identifier(table)} limit 50"
-        self.call_from_thread(self._set_sql, sql)
-        self.call_from_thread(self._set_status, f"Previewing table: {table}")
         try:
             columns, rows = preview_table(self.db_url, table)
         except Exception as exc:
-            self.call_from_thread(self._set_status, f"Preview failed: {exc}")
+            self.call_from_thread(self._finish_preview, execution_id, table, sql, None, None, str(exc))
             return
-        self.call_from_thread(self._set_status, f"Preview: {table} - {len(rows)} rows")
-        self.call_from_thread(self._set_results, columns, rows)
+        self.call_from_thread(self._finish_preview, execution_id, table, sql, columns, rows, None)
+
+    def _finish_preview(
+        self,
+        execution_id: int,
+        table: str,
+        sql: str,
+        columns: list[str] | None,
+        rows: list[tuple[object, ...]] | None,
+        error: str | None,
+    ) -> None:
+        if execution_id != self._execution_id or self._cancellation:
+            return
+        if error:
+            self._set_status(f"Preview failed: {error}")
+            return
+        assert columns is not None and rows is not None
+        self._set_sql(sql)
+        self._set_status(f"Preview: {table} - {len(rows)} rows")
+        self._set_results(columns, rows)
 
     def _load_schema_tree(self) -> None:
         tree = self.query_one("#schema", Tree)

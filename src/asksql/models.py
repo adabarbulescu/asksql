@@ -59,10 +59,17 @@ class QueryExecution:
     error: str | None
 
     def __post_init__(self) -> None:
-        if self.status == ExecutionStatus.SUCCEEDED and self.result is None:
+        succeeded = self.status == ExecutionStatus.SUCCEEDED
+        if succeeded and self.result is None:
             raise ValueError("successful execution requires a result")
-        if self.status != ExecutionStatus.SUCCEEDED and self.error is None:
-            raise ValueError("failed execution requires an error")
+        if succeeded and self.error is not None:
+            raise ValueError("successful execution cannot contain an error")
+        if not succeeded and self.result is not None:
+            raise ValueError("unsuccessful execution cannot contain a result")
+        if not succeeded and self.error is None:
+            raise ValueError("unsuccessful execution requires an error")
+        if self.duration_ms < 0:
+            raise ValueError("execution duration cannot be negative")
 
 
 class QueryTimeoutError(Exception):
@@ -84,8 +91,10 @@ class CancellationToken:
         return self._cancelled.is_set()
 
     def cancel(self) -> None:
-        self._cancelled.set()
         with self._lock:
+            if self._cancelled.is_set():
+                return
+            self._cancelled.set()
             callbacks = list(self._callbacks)
         for callback in callbacks:
             callback()

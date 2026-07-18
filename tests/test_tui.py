@@ -87,6 +87,20 @@ class TuiTest(unittest.IsolatedAsyncioTestCase):
 
             self.assertIs(app._cancellation, token)
 
+    async def test_tui_preview_during_query_does_not_change_results(self) -> None:
+        app = AskSqlApp(create_demo_db(), "ollama:qwen2.5-coder:7b")
+        token = CancellationToken()
+        app._cancellation = token
+        async with app.run_test() as pilot:
+            app._set_sql("select 1")
+            app._set_results(["value"], [(1,)])
+            app.preview("customers")
+            await pilot.pause()
+
+            self.assertEqual(app.query_one("#sql").text, "select 1")
+            self.assertEqual(app.query_one("#results").row_count, 1)
+            self.assertIs(app._cancellation, token)
+
     async def test_tui_marks_query_active_before_worker_runs(self) -> None:
         app = AskSqlApp(create_demo_db(), "ollama:qwen2.5-coder:7b")
         calls = []
@@ -104,6 +118,23 @@ class TuiTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(calls[0][0], "select 1")
             self.assertIs(calls[0][3], app._cancellation)
 
+    async def test_tui_keeps_latest_generation_when_responses_finish_out_of_order(self) -> None:
+        app = AskSqlApp(create_demo_db(), "ollama:qwen2.5-coder:7b")
+        calls = []
+
+        def fake_ask(question: str, generation_id: int) -> None:
+            calls.append((question, generation_id))
+
+        app._ask = fake_ask  # type: ignore[method-assign]
+        async with app.run_test() as pilot:
+            app.ask("old")
+            app.ask("new")
+            app._finish_generation(calls[1][1], "select 'new'", None)
+            app._finish_generation(calls[0][1], "select 'old'", None)
+            await pilot.pause()
+
+            self.assertEqual(app.query_one("#sql").text, "select 'new'")
+
     async def test_tui_ignores_stale_execution_result(self) -> None:
         app = AskSqlApp(create_demo_db(), "ollama:qwen2.5-coder:7b")
         async with app.run_test() as pilot:
@@ -114,6 +145,18 @@ class TuiTest(unittest.IsolatedAsyncioTestCase):
 
             table = app.query_one("#results")
             self.assertEqual(table.row_count, 0)
+
+    async def test_tui_ignores_stale_preview_after_newer_query(self) -> None:
+        app = AskSqlApp(create_demo_db(), "ollama:qwen2.5-coder:7b")
+        async with app.run_test() as pilot:
+            app._execution_id = 1
+            app._set_sql("select 1")
+            app._set_results(["value"], [(1,)])
+            app._finish_preview(0, "customers", "select * from customers limit 50", ["id"], [(2,)], None)
+            await pilot.pause()
+
+            self.assertEqual(app.query_one("#sql").text, "select 1")
+            self.assertEqual(app.query_one("#results").row_count, 1)
 
     async def test_tui_unmount_cancels_running_query(self) -> None:
         app = AskSqlApp(create_demo_db(), "ollama:qwen2.5-coder:7b")
