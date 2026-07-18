@@ -1,15 +1,62 @@
 from __future__ import annotations
 
-import re
+import sqlglot
+from sqlglot import exp
+from sqlglot.errors import ParseError
 
 
-WRITE_RE = re.compile(r"\b(insert|update|delete|drop|alter|create|truncate|replace|merge|grant|revoke|vacuum|attach)\b", re.I)
+READ_ONLY_PRAGMAS = {
+    "database_list",
+    "foreign_key_list",
+    "index_info",
+    "index_list",
+    "index_xinfo",
+    "table_info",
+    "table_list",
+    "table_xinfo",
+}
+DANGEROUS_NODES = (
+    exp.Alter,
+    exp.Create,
+    exp.Delete,
+    exp.Drop,
+    exp.Insert,
+    exp.Merge,
+    exp.TruncateTable,
+    exp.Update,
+)
 
 
 def is_read_only(sql: str) -> bool:
     sql = sql.strip().rstrip(";").strip()
-    if not sql or ";" in sql:
+    if not sql:
         return False
-    if WRITE_RE.search(sql):
+    lowered = sql.lower()
+    if lowered.startswith("explain query plan "):
+        return is_read_only(sql[19:])
+    if lowered.startswith("explain "):
+        return is_read_only(sql[8:])
+    try:
+        statements = sqlglot.parse(sql, read="sqlite")
+    except ParseError:
         return False
-    return bool(re.match(r"^(select|with|pragma|explain)\b", sql, re.I))
+    if len(statements) != 1:
+        return False
+    return _is_read_only_expression(statements[0])
+
+
+def _is_read_only_expression(statement: exp.Expression) -> bool:
+    if any(isinstance(node, DANGEROUS_NODES) for node in statement.walk()):
+        return False
+    if isinstance(statement, exp.Query):
+        return True
+    if isinstance(statement, exp.Pragma):
+        return _pragma_name(statement) in READ_ONLY_PRAGMAS
+    return False
+
+
+def _pragma_name(statement: exp.Pragma) -> str:
+    node = statement.this
+    if isinstance(node, exp.EQ):
+        node = node.this
+    return str(node.this if isinstance(node, exp.Var) else node).lower()
