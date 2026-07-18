@@ -35,6 +35,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("question", nargs=argparse.REMAINDER, help="question, schema DB URL, or SQL")
     args = parser.parse_args(argv)
     text = " ".join(args.question).strip()
+    if not validate_output_options(args.format, args.output, args.force):
+        return 1
 
     if args.db_url == "models":
         return show_models()
@@ -61,7 +63,8 @@ def main(argv: list[str] | None = None) -> int:
         error_console.print(f"[red]Error:[/] {exc}")
         return 1
 
-    console.print(Panel(Syntax(sql, "sql", theme="ansi_dark"), title="Generated SQL", border_style="green"))
+    sql_console = console if args.format == "table" and not args.output else error_console
+    sql_console.print(Panel(Syntax(sql, "sql", theme="ansi_dark"), title="Generated SQL", border_style="green"))
 
     if args.dry_run:
         return 0
@@ -81,17 +84,8 @@ def main(argv: list[str] | None = None) -> int:
 
 def print_result(result: QueryResult, output_format: str, output: str | None = None, force: bool = False) -> int:
     if output_format == "table":
-        if output:
-            error_console.print("[red]--output requires --format csv, json, or markdown.[/]")
-            return 1
-        if force:
-            error_console.print("[red]--force requires --output.[/]")
-            return 1
         print_table(result)
         return 0
-    if force and not output:
-        error_console.print("[red]--force requires --output.[/]")
-        return 1
     text = format_result(result, output_format)
     if output:
         path = Path(output)
@@ -103,12 +97,22 @@ def print_result(result: QueryResult, output_format: str, output: str | None = N
         except OSError as exc:
             error_console.print(f"[red]Could not write output:[/] {exc}")
             return 1
-        console.print(f"Wrote {output_format} to {path}")
+        error_console.print(f"Wrote {output_format} to {path}")
     else:
         sys.stdout.write(text)
     if result.truncated:
         error_console.print(f"[yellow]Results limited to {result.limit} rows.[/]")
     return 0
+
+
+def validate_output_options(output_format: str, output: str | None = None, force: bool = False) -> bool:
+    if output_format == "table" and output:
+        error_console.print("[red]--output requires --format csv, json, or markdown.[/]")
+        return False
+    if force and not output:
+        error_console.print("[red]--force requires --output.[/]")
+        return False
+    return True
 
 
 def print_table(result: QueryResult) -> None:
@@ -132,7 +136,8 @@ def run_sql_command(text: str, yes: bool, output_format: str = "table", output: 
         return 1
     db_url = create_demo_db() if target == "demo" else target
     sql = pretty_sql(sql)
-    console.print(Panel(Syntax(sql, "sql", theme="ansi_dark"), title="SQL", border_style="green"))
+    sql_console = console if output_format == "table" and not output else error_console
+    sql_console.print(Panel(Syntax(sql, "sql", theme="ansi_dark"), title="SQL", border_style="green"))
     if not is_read_only(sql):
         error_console.print("[red]Refusing to run non-read-only SQL.[/]")
         return 2

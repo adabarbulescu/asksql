@@ -1,7 +1,7 @@
 import json
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
 
@@ -37,6 +37,17 @@ class ExportTest(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(stdout.getvalue(), "value\r\n[red]literal[/red]\r\n")
 
+    def test_run_export_stdout_is_machine_readable(self) -> None:
+        stdout = StringIO()
+        stderr = StringIO()
+
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            exit_code = main(["--yes", "--format", "csv", "run", "demo select id from customers order by id limit 1"])
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stdout.getvalue(), "id\r\n1\r\n")
+        self.assertIn("SQL", stderr.getvalue())
+
     def test_refuses_to_overwrite_without_force(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "customers.csv"
@@ -64,14 +75,20 @@ class ExportTest(unittest.TestCase):
             self.assertEqual(exit_code, 1)
 
     def test_rejects_output_for_table_format(self) -> None:
-        exit_code = print_result(QueryResult(["id"], [(1,)], False, 200), "table", "ignored.csv")
+        stdout = StringIO()
+        with redirect_stdout(stdout):
+            exit_code = main(["--yes", "--output", "ignored.csv", "run", "demo select id from customers"])
 
         self.assertEqual(exit_code, 1)
+        self.assertEqual(stdout.getvalue(), "")
 
     def test_rejects_force_without_output(self) -> None:
-        exit_code = print_result(QueryResult(["id"], [(1,)], False, 200), "csv", force=True)
+        stdout = StringIO()
+        with redirect_stdout(stdout):
+            exit_code = main(["--yes", "--force", "--format", "csv", "run", "demo select id from customers"])
 
         self.assertEqual(exit_code, 1)
+        self.assertEqual(stdout.getvalue(), "")
 
 
 if __name__ == "__main__":
