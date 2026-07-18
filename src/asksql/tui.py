@@ -7,7 +7,7 @@ from textual.widgets import DataTable, Footer, Header, Input, Static, TextArea, 
 
 from asksql.llm import generate_sql
 from asksql.safety import is_read_only
-from asksql.sqlite import inspect, preview_table, query, quote_identifier, schema
+from asksql.sqlite import DEFAULT_LIMIT, inspect, limited_query, preview_table, quote_identifier, schema
 
 
 class AskSqlApp(App[None]):
@@ -83,7 +83,7 @@ class AskSqlApp(App[None]):
                 with Vertical(id="work"):
                     yield Input(placeholder="Ask AI - type a question, then press Enter", id="question")
                     yield TextArea("select * from customers limit 10", language="sql", id="sql")
-                    yield Static("Tab/Shift+Tab move | Enter asks/previews | Ctrl+Enter runs SQL | Ctrl+Q quits", id="status")
+                    yield Static("Tab/Shift+Tab move | Enter generates SQL | Ctrl+Enter runs SQL | Ctrl+Q quits", id="status")
             with Vertical(id="bottom"):
                 yield DataTable(id="results")
         yield Footer()
@@ -133,7 +133,8 @@ class AskSqlApp(App[None]):
             self.call_from_thread(self._set_status, f"Error: {exc}")
             return
         self.call_from_thread(self._set_sql, sql)
-        self.run_sql(sql, f"AI: {question}")
+        self.call_from_thread(self._set_status, "Generated SQL. Review or edit it, then press Ctrl+Enter to run.")
+        self.call_from_thread(self.action_focus_sql)
 
     @work(thread=True)
     def run_sql(self, sql: str, source: str = "Manual SQL") -> None:
@@ -142,11 +143,12 @@ class AskSqlApp(App[None]):
             return
         self.call_from_thread(self._set_status, f"Running: {source}")
         try:
-            columns, rows = query(self.db_url, sql)
+            columns, rows, truncated = limited_query(self.db_url, sql)
         except Exception as exc:
             self.call_from_thread(self._set_status, f"Query failed: {exc}")
             return
-        self.call_from_thread(self._set_status, f"{source} - {len(rows)} rows")
+        suffix = f"{DEFAULT_LIMIT}+ rows, limited to {DEFAULT_LIMIT}" if truncated else f"{len(rows)} rows"
+        self.call_from_thread(self._set_status, f"{source} - {suffix}")
         self.call_from_thread(self._set_results, columns, rows)
 
     @work(thread=True)

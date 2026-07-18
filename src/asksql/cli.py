@@ -13,7 +13,7 @@ from asksql.demo import create_demo_db
 from asksql.llm import generate_sql, ollama_models
 from asksql.safety import is_read_only
 from asksql.sql import pretty_sql
-from asksql.sqlite import inspect, query, schema
+from asksql.sqlite import DEFAULT_LIMIT, inspect, limited_query, schema
 from asksql.tui import run_tui
 
 console = Console()
@@ -67,19 +67,20 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     try:
-        columns, rows = query(db_url, sql)
+        columns, rows, truncated = limited_query(db_url, sql)
     except Exception as exc:
         error_console.print(f"[red]Query failed:[/] {exc}")
         return 1
-    print_table(columns, rows)
+    print_table(columns, rows, truncated)
     return 0
 
 
-def print_table(columns: list[str], rows: list[tuple[object, ...]]) -> None:
+def print_table(columns: list[str], rows: list[tuple[object, ...]], truncated: bool = False) -> None:
     if not columns:
         console.print("[dim](no columns)[/]")
         return
-    table = Table(title=f"{len(rows)} rows", show_lines=False)
+    title = f"{DEFAULT_LIMIT}+ rows (limited to {DEFAULT_LIMIT})" if truncated else f"{len(rows)} rows"
+    table = Table(title=title, show_lines=False)
     for column in columns:
         table.add_column(column, overflow="fold")
     for row in rows:
@@ -101,11 +102,11 @@ def run_sql_command(text: str, yes: bool) -> int:
     if not yes and not confirm_run():
         return 1
     try:
-        columns, rows = query(db_url, sql)
+        columns, rows, truncated = limited_query(db_url, sql)
     except Exception as exc:
         error_console.print(f"[red]Query failed:[/] {exc}")
         return 1
-    print_table(columns, rows)
+    print_table(columns, rows, truncated)
     return 0
 
 

@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from asksql.demo import create_demo_db
 from asksql.sqlite import preview_table
@@ -29,6 +30,24 @@ class TuiTest(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             editor = app.query_one("#sql")
             self.assertEqual(editor.text, "select 1")
+
+    async def test_tui_generates_sql_without_running_it(self) -> None:
+        app = AskSqlApp(create_demo_db(), "ollama:qwen2.5-coder:7b")
+        ran_sql = False
+
+        def run_sql(*_: object) -> None:
+            nonlocal ran_sql
+            ran_sql = True
+
+        app.run_sql = run_sql  # type: ignore[method-assign]
+        async with app.run_test() as pilot:
+            with patch("asksql.tui.generate_sql", return_value="select * from customers"):
+                app.ask("show customers")
+                await pilot.pause(0.2)
+
+            editor = app.query_one("#sql")
+            self.assertEqual(editor.text, "select * from customers")
+            self.assertFalse(ran_sql)
 
     async def test_tui_sets_status(self) -> None:
         app = AskSqlApp(create_demo_db(), "ollama:qwen2.5-coder:7b")
