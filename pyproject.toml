@@ -30,6 +30,7 @@ dev = [
     "coverage>=7.6",
     "mypy>=1.11",
     "ruff>=0.6",
+    "setuptools>=69",
     "twine>=5.1",
 ]
 
