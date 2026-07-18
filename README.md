@@ -1,5 +1,7 @@
 # asksql
 
+[![CI](https://github.com/asksql/asksql/actions/workflows/tests.yml/badge.svg)](https://github.com/asksql/asksql/actions/workflows/tests.yml)
+
 Ask your database questions from the terminal.
 
 Local models by default. API models when you want them. SQL shown before it runs.
@@ -12,11 +14,27 @@ asksql ask sqlite://app.db "Which customers spent the most last month?"
 
 ## Install
 
+With pipx:
+
+```bash
+pipx install asksql
+```
+
+For local development:
+
 ```bash
 python3 -m venv .venv
 . .venv/bin/activate
-pip install -e .
+pip install -e ".[dev]"
 ```
+
+## Visual Tour
+
+Record these before the 0.2.0 release:
+
+- `docs/question-sql-review-result.gif`: question -> SQL -> review -> result.
+- `docs/cancel-timeout.gif`: long query -> cancel or timeout.
+- `docs/schema-explorer.gif`: schema tree -> table preview.
 
 ## Use
 
@@ -116,6 +134,16 @@ asksql demo "which customers spent the most?"
 - Uses Ollama first: `ollama:qwen2.5-coder:7b`.
 - Uses `OPENAI_BASE_URL` when set, otherwise `https://api.openai.com/v1`.
 - Does not send data rows to the model, only schema.
+
+## Safety Model
+
+- Generated SQL is displayed before execution.
+- Generated SQL requires confirmation unless `--yes` is set.
+- Only read-only SQL is allowed.
+- Queries are limited to 200 rows by default.
+- SQLite execution times out after 30 seconds by default.
+- `Ctrl+C` cancels a running TUI query.
+- Model calls receive schema only, not data rows.
 
 ## Anti-scope
 

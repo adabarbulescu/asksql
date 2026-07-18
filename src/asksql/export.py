@@ -6,7 +6,6 @@ from io import StringIO
 
 from asksql.models import QueryResult
 
-
 ExportFormat = str
 
 
@@ -14,7 +13,8 @@ def format_result(result: QueryResult, output_format: ExportFormat) -> str:
     if output_format == "csv":
         return _csv(result)
     if output_format == "json":
-        return json.dumps([dict(zip(result.columns, row)) for row in result.rows], indent=2, default=str) + "\n"
+        data = [dict(zip(result.columns, row, strict=True)) for row in result.rows]
+        return json.dumps(data, indent=2, default=str) + "\n"
     if output_format == "markdown":
         return _markdown(result)
     raise ValueError(f"unsupported format: {output_format}")

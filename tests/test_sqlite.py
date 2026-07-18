@@ -1,7 +1,6 @@
 import sqlite3
 import tempfile
 import threading
-import time
 import unittest
 from pathlib import Path
 
@@ -145,7 +144,10 @@ class SqliteTest(unittest.TestCase):
 
         foreign_keys = inspect(f"sqlite://{path}")["child"].foreign_keys
 
-        self.assertEqual({(fk.column, fk.referenced_table, fk.referenced_column) for fk in foreign_keys}, {("x", "parent", "a"), ("y", "parent", "b")})
+        self.assertEqual(
+            {(fk.column, fk.referenced_table, fk.referenced_column) for fk in foreign_keys},
+            {("x", "parent", "a"), ("y", "parent", "b")},
+        )
 
 
 if __name__ == "__main__":

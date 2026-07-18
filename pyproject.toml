@@ -4,17 +4,58 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "asksql"
-version = "0.1.0"
+version = "0.2.0"
 description = "Ask your database questions from the terminal."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
-authors = [{ name = "asksql contributors" }]
+authors = [{ name = "adabarbulescu" }]
 keywords = ["sql", "sqlite", "ollama", "openai", "text-to-sql", "cli"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Database",
+    "Topic :: Software Development :: User Interfaces",
+]
 dependencies = ["rich>=13.7", "sqlglot>=30.0,<31", "textual>=8.2"]
+
+[project.optional-dependencies]
+dev = [
+    "build>=1.2",
+    "coverage>=7.6",
+    "mypy>=1.11",
+    "ruff>=0.6",
+    "twine>=5.1",
+]
+
+[project.urls]
+Homepage = "https://github.com/asksql/asksql"
+Issues = "https://github.com/asksql/asksql/issues"
+Source = "https://github.com/asksql/asksql"
 
 [project.scripts]
 asksql = "asksql.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+asksql = ["py.typed"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B"]
+
+[tool.mypy]
+python_version = "3.11"
+packages = ["asksql"]
+ignore_missing_imports = true
+warn_unused_ignores = true

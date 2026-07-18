@@ -80,6 +80,7 @@ class AskSqlApp(App[None]):
         self.service = QueryService(db_url, model)
         self._cancellation: CancellationToken | None = None
         self._execution_id = 0
+        self._preview_id = 0
         self._generation_id = 0
 
     def compose(self) -> ComposeResult:
@@ -90,7 +91,9 @@ class AskSqlApp(App[None]):
                 with Vertical(id="work"):
                     yield Input(placeholder="Ask AI - type a question, then press Enter", id="question")
                     yield TextArea("select * from customers limit 10", language="sql", id="sql")
-                    yield Static("Tab/Shift+Tab move | Enter generates SQL | Ctrl+Enter runs SQL | Ctrl+Q quits", id="status")
+                    yield Static(
+                        "Tab/Shift+Tab move | Enter generates SQL | Ctrl+Enter runs SQL | Ctrl+Q quits", id="status"
+                    )
             with Vertical(id="bottom"):
                 yield DataTable(id="results")
         yield Footer()
@@ -185,7 +188,9 @@ class AskSqlApp(App[None]):
         self._execution_id += 1
         return self._execution_id
 
-    def _finish_sql(self, execution_id: int, cancellation: CancellationToken, source: str, execution: QueryExecution) -> None:
+    def _finish_sql(
+        self, execution_id: int, cancellation: CancellationToken, source: str, execution: QueryExecution
+    ) -> None:
         if execution_id != self._execution_id:
             return
         if self._cancellation is cancellation:
@@ -216,30 +221,34 @@ class AskSqlApp(App[None]):
         if self._cancellation:
             self._set_status("A query is already running. Press Ctrl+C to cancel it.")
             return
-        execution_id = self._execution_id
+        preview_id = self._next_preview_id()
         self._set_status(f"Previewing table: {table}")
-        self._preview(table, execution_id)
+        self._preview(table, preview_id)
 
     @work(thread=True)
-    def _preview(self, table: str, execution_id: int) -> None:
+    def _preview(self, table: str, preview_id: int) -> None:
         sql = f"select * from {quote_identifier(table)} limit 50"
         try:
             columns, rows = preview_table(self.db_url, table)
         except Exception as exc:
-            self.call_from_thread(self._finish_preview, execution_id, table, sql, None, None, str(exc))
+            self.call_from_thread(self._finish_preview, preview_id, table, sql, None, None, str(exc))
             return
-        self.call_from_thread(self._finish_preview, execution_id, table, sql, columns, rows, None)
+        self.call_from_thread(self._finish_preview, preview_id, table, sql, columns, rows, None)
+
+    def _next_preview_id(self) -> int:
+        self._preview_id += 1
+        return self._preview_id
 
     def _finish_preview(
         self,
-        execution_id: int,
+        preview_id: int,
         table: str,
         sql: str,
         columns: list[str] | None,
         rows: list[tuple[object, ...]] | None,
         error: str | None,
     ) -> None:
-        if execution_id != self._execution_id or self._cancellation:
+        if preview_id != self._preview_id or self._cancellation:
             return
         if error:
             self._set_status(f"Preview failed: {error}")
@@ -258,7 +267,9 @@ class AskSqlApp(App[None]):
             for column in table_schema.columns:
                 foreign_key = next((fk for fk in table_schema.foreign_keys if fk.column == column.name), None)
                 suffix = f" -> {foreign_key.referenced_table}.{foreign_key.referenced_column}" if foreign_key else ""
-                table_node.add_leaf(f"{column.name} {column.type}{' pk' if column.primary_key else ''}{suffix}".rstrip())
+                table_node.add_leaf(
+                    f"{column.name} {column.type}{' pk' if column.primary_key else ''}{suffix}".rstrip()
+                )
         tree.root.expand()
 
     def _schema_text(self) -> str:

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from typing import cast
+
 import sqlglot
 from sqlglot import exp
 from sqlglot.errors import ParseError
-
 
 READ_ONLY_PRAGMAS = {
     "database_list",
@@ -42,7 +43,8 @@ def is_read_only(sql: str) -> bool:
         return False
     if len(statements) != 1:
         return False
-    return _is_read_only_expression(statements[0])
+    statement = statements[0]
+    return bool(statement and _is_read_only_expression(cast(exp.Expression, statement)))
 
 
 def _is_read_only_expression(statement: exp.Expression) -> bool:

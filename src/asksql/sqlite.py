@@ -5,8 +5,15 @@ import time
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
-from asksql.models import CancellationToken, Column, ForeignKey, QueryCancelledError, QueryResult, QueryTimeoutError, TableSchema
-
+from asksql.models import (
+    CancellationToken,
+    Column,
+    ForeignKey,
+    QueryCancelledError,
+    QueryResult,
+    QueryTimeoutError,
+    TableSchema,
+)
 
 DEFAULT_LIMIT = 200
 MAX_LIMIT = 10_000
@@ -50,7 +57,10 @@ def inspect(db_url: str) -> dict[str, TableSchema]:
         return {
             table: TableSchema(
                 table,
-                [Column(col[1], col[2], bool(col[5])) for col in conn.execute(f"pragma table_info({quote_identifier(table)})").fetchall()],
+                [
+                    Column(col[1], col[2], bool(col[5]))
+                    for col in conn.execute(f"pragma table_info({quote_identifier(table)})").fetchall()
+                ],
                 [
                     ForeignKey(row[3], row[2], row[4])
                     for row in conn.execute(f"pragma foreign_key_list({quote_identifier(table)})").fetchall()

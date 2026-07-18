@@ -76,11 +76,15 @@ def base_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Ask your database questions from the terminal.")
     parser.add_argument("--model", default="ollama:qwen2.5-coder:7b", help="ollama:name or openai:name")
     parser.add_argument("--dry-run", action="store_true", help="show SQL without running it")
-    parser.add_argument("--format", choices=["table", "csv", "json", "markdown"], default="table", help="result output format")
+    parser.add_argument(
+        "--format", choices=["table", "csv", "json", "markdown"], default="table", help="result output format"
+    )
     parser.add_argument("--output", help="write csv/json/markdown output to a file")
     parser.add_argument("--force", action="store_true", help="overwrite --output if it exists")
     parser.add_argument("--limit", type=result_limit, default=DEFAULT_LIMIT, help=f"maximum result rows, 1-{MAX_LIMIT}")
-    parser.add_argument("--timeout", type=query_timeout, default=DEFAULT_TIMEOUT, help="SQLite execution timeout in seconds")
+    parser.add_argument(
+        "--timeout", type=query_timeout, default=DEFAULT_TIMEOUT, help="SQLite execution timeout in seconds"
+    )
     parser.add_argument("-y", "--yes", action="store_true", help="run read-only SQL without prompting")
     parser.add_argument("--show-schema", action="store_true", help="print the schema sent to the model")
     return parser
@@ -164,7 +168,7 @@ def command_ask(args: argparse.Namespace) -> int:
 def command_run(args: argparse.Namespace) -> int:
     sql = " ".join(args.sql).strip()
     if not args.database or not sql:
-        console.print("[red]Usage:[/] asksql run <db-url|demo> \"select ...\"")
+        console.print('[red]Usage:[/] asksql run <db-url|demo> "select ..."')
         return 1
     return run_sql(args.database, sql, args.yes, args.format, args.output, args.force, args.limit, args.timeout)
 
@@ -258,7 +262,7 @@ def run_sql_command(
 ) -> int:
     target, _, sql = text.partition(" ")
     if not target or not sql:
-        console.print("[red]Usage:[/] asksql run <db-url|demo> \"select ...\"")
+        console.print('[red]Usage:[/] asksql run <db-url|demo> "select ..."')
         return 1
     return run_sql(target, sql, yes, output_format, output, force, limit, timeout)
 
@@ -305,7 +309,8 @@ def show_models() -> int:
     table.add_column("name")
     table.add_column("size", justify="right")
     for model in models:
-        table.add_row(str(model.get("name", "")), format_size(int(model.get("size", 0))))
+        size = model.get("size", 0)
+        table.add_row(str(model.get("name", "")), format_size(size if isinstance(size, int) else 0))
     console.print(table)
     return 0
 
@@ -334,11 +339,12 @@ def show_schema(db_url: str) -> int:
 
 
 def format_size(size: int) -> str:
+    value = float(size)
     for unit in ["B", "KB", "MB", "GB"]:
-        if size < 1024 or unit == "GB":
-            return f"{size:.1f} {unit}" if unit != "B" else f"{size} B"
-        size /= 1024
-    return f"{size:.1f} GB"
+        if value < 1024 or unit == "GB":
+            return f"{value:.1f} {unit}" if unit != "B" else f"{int(value)} B"
+        value /= 1024
+    return f"{value:.1f} GB"
 
 
 if __name__ == "__main__":

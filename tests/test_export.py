@@ -23,7 +23,18 @@ class ExportTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "customers.json"
 
-            exit_code = main(["--yes", "--format", "json", "--output", str(output), "run", "demo", "select id, name from customers order by id limit 1"])
+            exit_code = main(
+                [
+                    "--yes",
+                    "--format",
+                    "json",
+                    "--output",
+                    str(output),
+                    "run",
+                    "demo",
+                    "select id, name from customers order by id limit 1",
+                ]
+            )
 
             self.assertEqual(exit_code, 0)
             self.assertEqual(json.loads(output.read_text()), [{"id": 1, "name": "Ada"}])
@@ -43,7 +54,9 @@ class ExportTest(unittest.TestCase):
         stderr = StringIO()
 
         with redirect_stdout(stdout), redirect_stderr(stderr):
-            exit_code = main(["--yes", "--format", "csv", "run", "demo", "select id from customers order by id limit 1"])
+            exit_code = main(
+                ["--yes", "--format", "csv", "run", "demo", "select id from customers order by id limit 1"]
+            )
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(stdout.getvalue(), "id\r\n1\r\n")
@@ -67,7 +80,9 @@ class ExportTest(unittest.TestCase):
         stderr = StringIO()
 
         with redirect_stdout(stdout), redirect_stderr(stderr):
-            exit_code = main(["--yes", "--limit", "1", "--format", "csv", "run", "demo", "select id from customers order by id"])
+            exit_code = main(
+                ["--yes", "--limit", "1", "--format", "csv", "run", "demo", "select id from customers order by id"]
+            )
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(stdout.getvalue(), "id\r\n1\r\n")
@@ -133,7 +148,9 @@ class ExportTest(unittest.TestCase):
             output = Path(directory) / "customers.csv"
             output.write_text("existing")
 
-            exit_code = main(["--yes", "--format", "csv", "--output", str(output), "run", "demo", "select id from customers"])
+            exit_code = main(
+                ["--yes", "--format", "csv", "--output", str(output), "run", "demo", "select id from customers"]
+            )
 
             self.assertEqual(exit_code, 1)
             self.assertEqual(output.read_text(), "existing")
@@ -143,7 +160,19 @@ class ExportTest(unittest.TestCase):
             output = Path(directory) / "customers.csv"
             output.write_text("existing")
 
-            exit_code = main(["--yes", "--force", "--format", "csv", "--output", str(output), "run", "demo", "select id from customers order by id limit 1"])
+            exit_code = main(
+                [
+                    "--yes",
+                    "--force",
+                    "--format",
+                    "csv",
+                    "--output",
+                    str(output),
+                    "run",
+                    "demo",
+                    "select id from customers order by id limit 1",
+                ]
+            )
 
             self.assertEqual(exit_code, 0)
             self.assertEqual(output.read_text(), "id\n1\n")

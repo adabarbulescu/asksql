@@ -47,7 +47,9 @@ class QueryServiceTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             QueryExecution("select 1", QueryResult(["1"], [(1,)], False, 200), -1, ExecutionStatus.SUCCEEDED, None)
 
-        execution = QueryExecution("select 1", QueryResult(["1"], [(1,)], False, 200), 0, ExecutionStatus.SUCCEEDED, None)
+        execution = QueryExecution(
+            "select 1", QueryResult(["1"], [(1,)], False, 200), 0, ExecutionStatus.SUCCEEDED, None
+        )
 
         self.assertEqual(execution.status, ExecutionStatus.SUCCEEDED)
 

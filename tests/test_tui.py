@@ -1,4 +1,5 @@
 import unittest
+
 from asksql.demo import create_demo_db
 from asksql.models import CancellationToken, ExecutionStatus, QueryExecution, QueryResult
 from asksql.sqlite import DEFAULT_LIMIT, DEFAULT_TIMEOUT, preview_table
@@ -139,7 +140,9 @@ class TuiTest(unittest.IsolatedAsyncioTestCase):
         app = AskSqlApp(create_demo_db(), "ollama:qwen2.5-coder:7b")
         async with app.run_test() as pilot:
             app._execution_id = 2
-            execution = QueryExecution("select 1", QueryResult(["id"], [(1,)], False, 200), 0, ExecutionStatus.SUCCEEDED, None)
+            execution = QueryExecution(
+                "select 1", QueryResult(["id"], [(1,)], False, 200), 0, ExecutionStatus.SUCCEEDED, None
+            )
             app._finish_sql(1, CancellationToken(), "Manual SQL", execution)
             await pilot.pause()
 
@@ -149,13 +152,32 @@ class TuiTest(unittest.IsolatedAsyncioTestCase):
     async def test_tui_ignores_stale_preview_after_newer_query(self) -> None:
         app = AskSqlApp(create_demo_db(), "ollama:qwen2.5-coder:7b")
         async with app.run_test() as pilot:
-            app._execution_id = 1
+            app._preview_id = 1
+            app._cancellation = CancellationToken()
             app._set_sql("select 1")
             app._set_results(["value"], [(1,)])
-            app._finish_preview(0, "customers", "select * from customers limit 50", ["id"], [(2,)], None)
+            app._finish_preview(1, "customers", "select * from customers limit 50", ["id"], [(2,)], None)
             await pilot.pause()
 
             self.assertEqual(app.query_one("#sql").text, "select 1")
+            self.assertEqual(app.query_one("#results").row_count, 1)
+
+    async def test_tui_keeps_latest_preview_when_responses_finish_out_of_order(self) -> None:
+        app = AskSqlApp(create_demo_db(), "ollama:qwen2.5-coder:7b")
+        calls = []
+
+        def fake_preview(table: str, preview_id: int) -> None:
+            calls.append((table, preview_id))
+
+        app._preview = fake_preview  # type: ignore[method-assign]
+        async with app.run_test() as pilot:
+            app.preview("customers")
+            app.preview("orders")
+            app._finish_preview(calls[1][1], "orders", "select * from orders limit 50", ["id"], [(2,)], None)
+            app._finish_preview(calls[0][1], "customers", "select * from customers limit 50", ["id"], [(1,)], None)
+            await pilot.pause()
+
+            self.assertEqual(app.query_one("#sql").text, "select * from orders limit 50")
             self.assertEqual(app.query_one("#results").row_count, 1)
 
     async def test_tui_unmount_cancels_running_query(self) -> None:

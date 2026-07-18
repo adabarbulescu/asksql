@@ -4,10 +4,10 @@ import json
 import os
 import subprocess
 import urllib.request
+from typing import Any
 from urllib.error import URLError
 
 from asksql.sql import clean_sql
-
 
 SYSTEM = """Write SQLite SQL.
 Return only SQL, no markdown.
@@ -24,7 +24,7 @@ def generate_sql(model: str, schema: str, question: str) -> str:
     raise ValueError("model must look like ollama:name or openai:name")
 
 
-def post_json(url: str, payload: dict[str, object], headers: dict[str, str] | None = None) -> dict[str, object]:
+def post_json(url: str, payload: dict[str, object], headers: dict[str, str] | None = None) -> dict[str, Any]:
     req = urllib.request.Request(
         url,
         data=json.dumps(payload).encode(),
@@ -43,7 +43,8 @@ def ollama(model: str, schema: str, question: str) -> str:
 
 def ollama_models() -> list[dict[str, object]]:
     data = get_json(f"{ollama_base_url()}/api/tags")
-    return list(data.get("models", []))
+    models = data.get("models", [])
+    return list(models) if isinstance(models, list) else []
 
 
 def ollama_base_url() -> str:
@@ -59,7 +60,7 @@ def ollama_base_url() -> str:
 
 
 def _wsl_urls() -> list[str]:
-    urls = []
+    urls: list[str] = []
     try:
         with open("/etc/resolv.conf", encoding="utf-8") as file:
             urls.extend(f"http://{line.split()[1]}:11434" for line in file if line.startswith("nameserver "))
@@ -71,7 +72,9 @@ def _wsl_urls() -> list[str]:
                 "powershell.exe",
                 "-NoProfile",
                 "-Command",
-                "(Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.InterfaceAlias -like '*WSL*' -or $_.InterfaceAlias -like '*vEthernet*' } | Select-Object -First 1 -ExpandProperty IPAddress)",
+                "(Get-NetIPAddress -AddressFamily IPv4 | Where-Object { "
+                "$_.InterfaceAlias -like '*WSL*' -or $_.InterfaceAlias -like '*vEthernet*' "
+                "} | Select-Object -First 1 -ExpandProperty IPAddress)",
             ],
             stderr=subprocess.DEVNULL,
             text=True,
@@ -84,7 +87,7 @@ def _wsl_urls() -> list[str]:
     return urls
 
 
-def get_json(url: str) -> dict[str, object]:
+def get_json(url: str) -> dict[str, Any]:
     with urllib.request.urlopen(url, timeout=10) as res:
         return json.loads(res.read().decode())
 
