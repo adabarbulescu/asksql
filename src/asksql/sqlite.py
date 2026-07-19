@@ -9,6 +9,7 @@ from asksql.models import (
     CancellationToken,
     Column,
     ForeignKey,
+    MutationResult,
     QueryCancelledError,
     QueryResult,
     QueryTimeoutError,
@@ -30,6 +31,10 @@ def db_path(db_url: str) -> Path:
 
 def read_only_uri(db_url: str) -> str:
     return f"file:{db_path(db_url).resolve().as_posix()}?mode=ro"
+
+
+def read_write_uri(db_url: str) -> str:
+    return f"file:{db_path(db_url).resolve().as_posix()}?mode=rw"
 
 
 def schema(db_url: str) -> str:
@@ -120,6 +125,54 @@ def query_result(
             cursor = conn.execute(sql)
             rows = cursor.fetchmany(limit + 1)
             return QueryResult([col[0] for col in cursor.description or []], rows[:limit], len(rows) > limit, limit)
+        except sqlite3.OperationalError as exc:
+            if cancellation and cancellation.cancelled:
+                raise QueryCancelledError("query cancelled") from exc
+            if deadline is not None and time.monotonic() >= deadline:
+                raise QueryTimeoutError(f"query timed out after {timeout:g} seconds") from exc
+            if interrupt_reason == "cancelled":
+                raise QueryCancelledError("query cancelled") from exc
+            if interrupt_reason == "timeout":
+                raise QueryTimeoutError(f"query timed out after {timeout:g} seconds") from exc
+            raise
+        finally:
+            conn.set_progress_handler(None, 0)
+            if remove_interrupt:
+                remove_interrupt()
+
+
+def execute_write(
+    db_url: str,
+    sql: str,
+    timeout: float | None = DEFAULT_TIMEOUT,
+    cancellation: CancellationToken | None = None,
+) -> MutationResult:
+    """Execute one write statement atomically against an existing SQLite database."""
+    if cancellation and cancellation.cancelled:
+        raise QueryCancelledError("query cancelled")
+    deadline = time.monotonic() + timeout if timeout is not None else None
+    interrupt_reason: str | None = None
+
+    with sqlite3.connect(read_write_uri(db_url), uri=True) as conn:
+        conn.execute("pragma foreign_keys = on")
+        remove_interrupt = cancellation.add_callback(conn.interrupt) if cancellation else None
+
+        def progress() -> int:
+            nonlocal interrupt_reason
+            if cancellation and cancellation.cancelled:
+                interrupt_reason = "cancelled"
+                return 1
+            if deadline is not None and time.monotonic() >= deadline:
+                interrupt_reason = "timeout"
+                return 1
+            return 0
+
+        conn.set_progress_handler(progress, 1000)
+        try:
+            cursor = conn.execute(sql)
+            if cancellation and cancellation.cancelled:
+                raise QueryCancelledError("query cancelled")
+            return MutationResult(max(cursor.rowcount, 0), cursor.lastrowid)
         except sqlite3.OperationalError as exc:
             if cancellation and cancellation.cancelled:
                 raise QueryCancelledError("query cancelled") from exc
