@@ -3,11 +3,39 @@ from __future__ import annotations
 from textual import work
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
-from textual.widgets import DataTable, Footer, Header, Input, Static, TextArea, Tree
+from textual.widgets import DataTable, Footer, Header, Input, Label, ListItem, ListView, Static, TextArea, Tree
 
-from asksql.models import CancellationToken, ExecutionStatus, QueryExecution, QueryResult
+from asksql.models import CancellationToken, ConnectionProfile, ExecutionStatus, QueryExecution, QueryResult
 from asksql.service import QueryService
 from asksql.sqlite import DEFAULT_LIMIT, DEFAULT_TIMEOUT, inspect, preview_table, quote_identifier
+
+
+class ConnectionListItem(ListItem):
+    def __init__(self, profile: ConnectionProfile) -> None:
+        super().__init__(Label(f"{profile.name}  [dim]{profile.url}[/]"))
+        self.profile = profile
+
+
+class ConnectionPickerApp(App[str | None]):
+    TITLE = "asksql connections"
+    BINDINGS = [("escape", "quit", "Cancel"), ("ctrl+q", "quit", "Cancel")]
+
+    def __init__(self, profiles: list[ConnectionProfile]) -> None:
+        super().__init__()
+        self.profiles = profiles
+
+    def compose(self) -> ComposeResult:
+        yield Header(show_clock=True)
+        yield Static("Select a database connection", id="connection-picker-title")
+        yield ListView(*(ConnectionListItem(profile) for profile in self.profiles), id="connections")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self.query_one("#connections", ListView).focus()
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        if isinstance(event.item, ConnectionListItem):
+            self.exit(event.item.profile.url)
 
 
 class AskSqlApp(App[None]):
@@ -300,3 +328,7 @@ class AskSqlApp(App[None]):
 
 def run_tui(db_url: str, model: str, limit: int = DEFAULT_LIMIT, timeout: float = DEFAULT_TIMEOUT) -> None:
     AskSqlApp(db_url, model, limit, timeout).run()
+
+
+def pick_connection(profiles: list[ConnectionProfile]) -> str | None:
+    return ConnectionPickerApp(profiles).run()

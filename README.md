@@ -10,7 +10,7 @@ Local models by default. API models when you want them. SQL shown before it runs
 asksql ask sqlite://app.db "Which customers spent the most last month?"
 ```
 
-`asksql` starts narrow: SQLite, Ollama, OpenAI-compatible APIs, and read-only SQL.
+`asksql` starts narrow: SQLite, Ollama, OpenAI-compatible APIs, and read-only SQL by default.
 
 ## Install
 
@@ -29,6 +29,32 @@ pip install -e ".[dev]"
 ```
 
 ## Use
+
+Save a real SQLite database once, then use its name everywhere:
+
+```bash
+asksql connections add local --url sqlite://app.db
+asksql ask local "which customers spent the most?"
+asksql --yes run local "select count(*) from customers"
+```
+
+Launch `asksql` without arguments to pick a saved connection and open the TUI:
+
+```bash
+asksql
+```
+
+Manage saved connections:
+
+```bash
+asksql connections list
+asksql connections show local
+asksql connections remove local
+```
+
+Connection profiles are stored in `$XDG_CONFIG_HOME/asksql/connections.json` (or
+`~/.config/asksql/connections.json`) with private file permissions. Set
+`ASKSQL_CONFIG_DIR` to override the directory. Profiles support existing SQLite databases only.
 
 Try the built-in demo:
 

@@ -7,6 +7,12 @@ from typing import Callable
 
 
 @dataclass(frozen=True)
+class ConnectionProfile:
+    name: str
+    url: str
+
+
+@dataclass(frozen=True)
 class Column:
     name: str
     type: str

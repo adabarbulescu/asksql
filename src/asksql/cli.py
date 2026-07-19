@@ -11,6 +11,7 @@ from rich.prompt import Confirm
 from rich.syntax import Syntax
 from rich.table import Table
 
+from asksql.connections import ConnectionStore, ConnectionStoreError
 from asksql.demo import create_demo_db
 from asksql.export import format_result
 from asksql.llm import ollama_models
@@ -18,11 +19,11 @@ from asksql.models import ExecutionStatus, MutationResult, QueryExecution, Query
 from asksql.service import QueryService
 from asksql.sql import pretty_sql
 from asksql.sqlite import DEFAULT_LIMIT, DEFAULT_TIMEOUT, MAX_LIMIT, inspect, schema
-from asksql.tui import run_tui
+from asksql.tui import pick_connection, run_tui
 
 console = Console()
 error_console = Console(stderr=True)
-COMMANDS = {"ask", "run", "tui", "schema", "models"}
+COMMANDS = {"ask", "run", "tui", "schema", "models", "connections"}
 VALUE_OPTIONS = {"--model", "--format", "--output", "--limit", "--timeout"}
 
 
@@ -61,7 +62,27 @@ def build_parser() -> argparse.ArgumentParser:
     models = subparsers.add_parser("models", help="list Ollama models")
     models.set_defaults(func=command_models)
 
-    parser.set_defaults(func=command_help)
+    connections = subparsers.add_parser("connections", help="manage saved database connections")
+    connection_commands = connections.add_subparsers(dest="connection_command")
+
+    add_connection = connection_commands.add_parser("add", help="save an existing SQLite database")
+    add_connection.add_argument("name")
+    add_connection.add_argument("--url", required=True, help="SQLite URL, for example sqlite://app.db")
+    add_connection.set_defaults(func=command_connections_add)
+
+    list_connections = connection_commands.add_parser("list", help="list saved connections")
+    list_connections.set_defaults(func=command_connections_list)
+
+    show_connection = connection_commands.add_parser("show", help="show one saved connection")
+    show_connection.add_argument("name")
+    show_connection.set_defaults(func=command_connections_show)
+
+    remove_connection = connection_commands.add_parser("remove", help="remove a saved connection")
+    remove_connection.add_argument("name")
+    remove_connection.set_defaults(func=command_connections_remove)
+
+    connections.set_defaults(func=command_connections_help)
+    parser.set_defaults(func=command_launch)
     return parser
 
 
@@ -120,6 +141,78 @@ def command_help(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_launch(args: argparse.Namespace) -> int:
+    try:
+        profiles = ConnectionStore().list()
+    except ConnectionStoreError as exc:
+        error_console.print(f"[red]Connection error:[/] {exc}")
+        return 1
+    if not profiles:
+        console.print("[yellow]No saved connections.[/]")
+        console.print("Add one with: asksql connections add NAME --url sqlite://path/to/database.db")
+        console.print("Or try the demo with: asksql tui demo")
+        return 1
+    database = pick_connection(profiles)
+    if database is None:
+        return 0
+    run_tui(database, args.model, args.limit, args.timeout)
+    return 0
+
+
+def command_connections_help(args: argparse.Namespace) -> int:
+    console.print("Usage: asksql connections {add,list,show,remove} ...")
+    return 0
+
+
+def command_connections_add(args: argparse.Namespace) -> int:
+    try:
+        profile = ConnectionStore().add(args.name, args.url)
+    except ConnectionStoreError as exc:
+        error_console.print(f"[red]Connection error:[/] {exc}")
+        return 1
+    console.print(f"Saved [cyan]{profile.name}[/]: {profile.url}")
+    return 0
+
+
+def command_connections_list(args: argparse.Namespace) -> int:
+    try:
+        profiles = ConnectionStore().list()
+    except ConnectionStoreError as exc:
+        error_console.print(f"[red]Connection error:[/] {exc}")
+        return 1
+    table = Table(title="Connections")
+    table.add_column("name", style="cyan")
+    table.add_column("url")
+    for profile in profiles:
+        table.add_row(profile.name, profile.url)
+    console.print(table)
+    return 0
+
+
+def command_connections_show(args: argparse.Namespace) -> int:
+    try:
+        profile = ConnectionStore().get(args.name)
+    except ConnectionStoreError as exc:
+        error_console.print(f"[red]Connection error:[/] {exc}")
+        return 1
+    console.print(f"[cyan]{profile.name}[/] {profile.url}")
+    return 0
+
+
+def command_connections_remove(args: argparse.Namespace) -> int:
+    try:
+        profile = ConnectionStore().get(args.name)
+    except ConnectionStoreError as exc:
+        error_console.print(f"[red]Connection error:[/] {exc}")
+        return 1
+    confirmed = args.yes or bool(sys.stdin.isatty() and Confirm.ask(f"Remove connection {profile.name}?", default=False))
+    if not confirmed:
+        return 1
+    ConnectionStore().remove(profile.name)
+    console.print(f"Removed [cyan]{profile.name}[/]. The database file was not changed.")
+    return 0
+
+
 def command_models(args: argparse.Namespace) -> int:
     return show_models()
 
@@ -129,7 +222,12 @@ def command_schema(args: argparse.Namespace) -> int:
 
 
 def command_tui(args: argparse.Namespace) -> int:
-    run_tui(resolve_db_url(args.database), args.model, args.limit, args.timeout)
+    try:
+        database = resolve_db_url(args.database)
+    except ConnectionStoreError as exc:
+        error_console.print(f"[red]Connection error:[/] {exc}")
+        return 1
+    run_tui(database, args.model, args.limit, args.timeout)
     return 0
 
 
@@ -139,9 +237,9 @@ def command_ask(args: argparse.Namespace) -> int:
         build_parser().print_help()
         return 0
 
-    db_url = resolve_db_url(args.database)
-    service = QueryService(db_url, args.model)
     try:
+        db_url = resolve_db_url(args.database)
+        service = QueryService(db_url, args.model)
         db_schema = schema(db_url)
         sql_console = console if args.format == "table" and not args.output else error_console
         if args.show_schema:
@@ -295,7 +393,11 @@ def run_sql(
     *,
     allow_write: bool = False,
 ) -> int:
-    db_url = resolve_db_url(database)
+    try:
+        db_url = resolve_db_url(database)
+    except ConnectionStoreError as exc:
+        error_console.print(f"[red]Connection error:[/] {exc}")
+        return 1
     service = QueryService(db_url)
     sql = pretty_sql(sql)
     sql_console = console if output_format == "table" and not output else error_console
@@ -312,7 +414,11 @@ def run_sql(
 
 
 def resolve_db_url(database: str) -> str:
-    return create_demo_db() if database == "demo" else database
+    if database == "demo":
+        return create_demo_db()
+    if database.startswith("sqlite://"):
+        return database
+    return ConnectionStore().get(database).url
 
 
 def print_mutation_result(result: MutationResult) -> int:
@@ -346,8 +452,8 @@ def show_models() -> int:
 
 
 def show_schema(db_url: str) -> int:
-    db_url = create_demo_db() if db_url == "demo" else db_url
     try:
+        db_url = resolve_db_url(db_url)
         tables = inspect(db_url)
     except Exception as exc:
         error_console.print(f"[red]Could not inspect schema:[/] {exc}")

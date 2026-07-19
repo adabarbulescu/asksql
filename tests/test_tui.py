@@ -1,12 +1,22 @@
 import unittest
 
 from asksql.demo import create_demo_db
-from asksql.models import CancellationToken, ExecutionStatus, QueryExecution, QueryResult
+from asksql.models import CancellationToken, ConnectionProfile, ExecutionStatus, QueryExecution, QueryResult
 from asksql.sqlite import DEFAULT_LIMIT, DEFAULT_TIMEOUT, preview_table
-from asksql.tui import AskSqlApp
+from asksql.tui import AskSqlApp, ConnectionPickerApp
 
 
 class TuiTest(unittest.IsolatedAsyncioTestCase):
+    async def test_connection_picker_returns_selected_url(self) -> None:
+        profile = ConnectionProfile("local", "sqlite:///tmp/local.db")
+        app = ConnectionPickerApp([profile])
+
+        async with app.run_test() as pilot:
+            await pilot.press("enter")
+            await pilot.pause()
+
+        self.assertEqual(app.return_value, profile.url)
+
     async def test_tui_mounts(self) -> None:
         app = AskSqlApp(create_demo_db(), "ollama:qwen2.5-coder:7b")
         async with app.run_test() as pilot:

@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented in this file.
 
+## Unreleased
+
+### Added
+
+- Saved SQLite connection profiles with add, list, show, and remove commands.
+- Named connections accepted by ask, run, schema, and TUI commands.
+- A zero-argument connection picker that launches the TUI.
+
 ## [0.2.0] - 2026-07-19
 
 ### Added
