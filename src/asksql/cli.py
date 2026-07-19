@@ -14,7 +14,7 @@ from rich.table import Table
 from asksql.demo import create_demo_db
 from asksql.export import format_result
 from asksql.llm import ollama_models
-from asksql.models import ExecutionStatus, QueryExecution, QueryResult
+from asksql.models import ExecutionStatus, MutationResult, QueryExecution, QueryResult
 from asksql.service import QueryService
 from asksql.sql import pretty_sql
 from asksql.sqlite import DEFAULT_LIMIT, DEFAULT_TIMEOUT, MAX_LIMIT, inspect, schema
@@ -44,7 +44,8 @@ def build_parser() -> argparse.ArgumentParser:
     ask.add_argument("question", nargs=argparse.REMAINDER)
     ask.set_defaults(func=command_ask)
 
-    run = subparsers.add_parser("run", help="run read-only SQL")
+    run = subparsers.add_parser("run", help="run read-only SQL or explicitly opted-in writes")
+    run.add_argument("--write", action="store_true", help="allow one INSERT, UPDATE, DELETE, or DDL statement")
     run.add_argument("database")
     run.add_argument("sql", nargs=argparse.REMAINDER)
     run.set_defaults(func=command_run)
@@ -170,7 +171,20 @@ def command_run(args: argparse.Namespace) -> int:
     if not args.database or not sql:
         console.print('[red]Usage:[/] asksql run <db-url|demo> "select ..."')
         return 1
-    return run_sql(args.database, sql, args.yes, args.format, args.output, args.force, args.limit, args.timeout)
+    if args.write and (args.output or args.format != "table"):
+        error_console.print("[red]Write execution does not support --format or --output.[/]")
+        return 1
+    return run_sql(
+        args.database,
+        sql,
+        args.yes,
+        args.format,
+        args.output,
+        args.force,
+        args.limit,
+        args.timeout,
+        allow_write=args.write,
+    )
 
 
 def print_result(result: QueryResult, output_format: str, output: str | None = None, force: bool = False) -> int:
@@ -259,12 +273,13 @@ def run_sql_command(
     force: bool = False,
     limit: int = DEFAULT_LIMIT,
     timeout: float | None = DEFAULT_TIMEOUT,
+    allow_write: bool = False,
 ) -> int:
     target, _, sql = text.partition(" ")
     if not target or not sql:
         console.print('[red]Usage:[/] asksql run <db-url|demo> "select ..."')
         return 1
-    return run_sql(target, sql, yes, output_format, output, force, limit, timeout)
+    return run_sql(target, sql, yes, output_format, output, force, limit, timeout, allow_write=allow_write)
 
 
 def run_sql(
@@ -276,18 +291,22 @@ def run_sql(
     force: bool = False,
     limit: int = DEFAULT_LIMIT,
     timeout: float | None = DEFAULT_TIMEOUT,
+    *,
+    allow_write: bool = False,
 ) -> int:
     db_url = resolve_db_url(database)
     service = QueryService(db_url)
     sql = pretty_sql(sql)
     sql_console = console if output_format == "table" and not output else error_console
     sql_console.print(Panel(Syntax(sql, "sql", theme="ansi_dark"), title="SQL", border_style="green"))
-    if not yes and not confirm_run():
+    if not yes and not confirm_run(write=allow_write):
         return 1
-    execution = service.execute(sql, limit=limit, timeout=timeout)
+    execution = service.execute(sql, limit=limit, timeout=timeout, allow_write=allow_write)
     if execution.status != ExecutionStatus.SUCCEEDED:
         return print_execution_error(execution)
     assert execution.result is not None
+    if isinstance(execution.result, MutationResult):
+        return print_mutation_result(execution.result)
     return print_result(execution.result, output_format, output, force)
 
 
@@ -295,8 +314,18 @@ def resolve_db_url(database: str) -> str:
     return create_demo_db() if database == "demo" else database
 
 
-def confirm_run() -> bool:
-    return bool(sys.stdin.isatty() and Confirm.ask("Run this read-only query?", default=False))
+def print_mutation_result(result: MutationResult) -> int:
+    noun = "row" if result.affected_rows == 1 else "rows"
+    message = f"[green]Committed.[/] {result.affected_rows} {noun} affected."
+    if result.last_insert_id is not None:
+        message += f" Last insert id: {result.last_insert_id}."
+    console.print(message)
+    return 0
+
+
+def confirm_run(*, write: bool = False) -> bool:
+    prompt = "Commit this write statement?" if write else "Run this read-only query?"
+    return bool(sys.stdin.isatty() and Confirm.ask(prompt, default=False))
 
 
 def show_models() -> int:
