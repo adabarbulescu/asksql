@@ -205,7 +205,9 @@ def command_connections_remove(args: argparse.Namespace) -> int:
     except ConnectionStoreError as exc:
         error_console.print(f"[red]Connection error:[/] {exc}")
         return 1
-    confirmed = args.yes or bool(sys.stdin.isatty() and Confirm.ask(f"Remove connection {profile.name}?", default=False))
+    confirmed = args.yes or bool(
+        sys.stdin.isatty() and Confirm.ask(f"Remove connection {profile.name}?", default=False)
+    )
     if not confirmed:
         return 1
     ConnectionStore().remove(profile.name)
