@@ -1,0 +1,27 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "AskSQL Studio",
+  "version": "0.3.0",
+  "identifier": "dev.asksql.studio",
+  "build": {
+    "frontendDist": "../../src/asksql/studio/static"
+  },
+  "app": {
+    "windows": [{
+      "label": "main",
+      "title": "AskSQL Studio",
+      "width": 1440,
+      "height": 900,
+      "minWidth": 980,
+      "minHeight": 640,
+      "url": "index.html"
+    }],
+    "security": { "csp": null }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "createUpdaterArtifacts": true,
+    "externalBin": ["binaries/asksql-server"]
+  }
+}

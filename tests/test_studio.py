@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from asksql.cli import main
 from asksql.connections import ConnectionStore
 from asksql.studio import create_app
+from asksql.workspace import WorkspaceStore
 
 
 class StudioApiTest(unittest.TestCase):
@@ -20,9 +21,18 @@ class StudioApiTest(unittest.TestCase):
         with sqlite3.connect(database) as connection:
             connection.execute("create table projects(id integer primary key, name text)")
             connection.execute("insert into projects(name) values ('AskSQL Studio')")
+            connection.execute("create unique index projects_name on projects(name)")
+            connection.execute("create view project_names as select name from projects")
+            connection.execute(
+                "create trigger projects_trim after insert on projects "
+                "begin update projects set name = trim(name) where id = new.id; end"
+            )
         self.store = ConnectionStore(root / "connections.json")
         self.store.add("local", f"sqlite://{database}")
-        self.client = TestClient(create_app(store=self.store, static_dir=root / "missing-static"))
+        self.workspace = WorkspaceStore(root / "workspace.db")
+        self.client = TestClient(
+            create_app(store=self.store, workspace=self.workspace, static_dir=root / "missing-static")
+        )
 
     def test_lists_connections_and_structured_schema(self) -> None:
         connections = self.client.get("/api/connections")
@@ -33,6 +43,20 @@ class StudioApiTest(unittest.TestCase):
         self.assertEqual(schema.status_code, 200)
         self.assertEqual(schema.json()["tables"][0]["name"], "projects")
         self.assertTrue(schema.json()["tables"][0]["columns"][0]["primaryKey"])
+
+    def test_schema_intelligence_and_query_plan(self) -> None:
+        details = self.client.get("/api/connections/local/schema/details")
+        plan = self.client.post(
+            "/api/connections/local/explain", json={"sql": "select * from projects where name = 'AskSQL Studio'"}
+        )
+
+        self.assertEqual(details.status_code, 200)
+        self.assertEqual(details.json()["tables"][0]["rowCount"], 1)
+        self.assertEqual(details.json()["tables"][0]["indexes"][0]["name"], "projects_name")
+        self.assertEqual(details.json()["views"][0]["name"], "project_names")
+        self.assertEqual(details.json()["triggers"][0]["name"], "projects_trim")
+        self.assertEqual(plan.status_code, 200)
+        self.assertIn("INDEX", plan.json()["rows"][0][3].upper())
 
     def test_connection_lifecycle_and_validation(self) -> None:
         database = Path(self.directory.name) / "studio.db"
@@ -76,6 +100,14 @@ class StudioApiTest(unittest.TestCase):
         self.assertEqual(response.json(), {"model": "ollama:qwen", "ready": True, "detail": "ready"})
         check.assert_called_once_with("ollama:qwen")
 
+    def test_stores_openai_key_without_returning_it(self) -> None:
+        with patch("asksql.studio.server.set_secret") as save_secret:
+            response = self.client.put("/api/settings/openai", json={"api_key": "private-key"})
+
+        self.assertEqual(response.status_code, 204)
+        self.assertNotIn("private-key", response.text)
+        save_secret.assert_called_once_with("OPENAI_API_KEY", "private-key")
+
     def test_executes_read_only_query(self) -> None:
         response = self.client.post(
             "/api/query/execute",
@@ -98,6 +130,7 @@ class StudioApiTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["sql"], "select * from projects")
+        self.assertTrue(response.json()["historyId"])
 
     def test_refuses_writes_even_when_called_directly(self) -> None:
         response = self.client.post(
@@ -109,6 +142,22 @@ class StudioApiTest(unittest.TestCase):
         self.assertEqual(response.json()["status"], "refused")
         with sqlite3.connect(Path(self.directory.name) / "studio.db") as connection:
             self.assertEqual(connection.execute("select count(*) from projects").fetchone(), (1,))
+
+    def test_history_search_pin_restore_and_delete(self) -> None:
+        executed = self.client.post(
+            "/api/query/execute",
+            json={"connection": "local", "sql": "select name from projects", "source": "manual"},
+        ).json()
+        identifier = executed["historyId"]
+
+        found = self.client.get("/api/history", params={"search": "projects"}).json()["history"]
+        pinned = self.client.patch(f"/api/history/{identifier}/pin", json={"pinned": True}).json()
+        deleted = self.client.delete(f"/api/history/{identifier}")
+
+        self.assertEqual(found[0]["id"], identifier)
+        self.assertEqual(found[0]["status"], "succeeded")
+        self.assertTrue(pinned["pinned"])
+        self.assertEqual(deleted.status_code, 204)
 
     def test_unknown_connection_is_not_found(self) -> None:
         response = self.client.get("/api/connections/missing/schema")
@@ -123,7 +172,7 @@ class StudioApiTest(unittest.TestCase):
         studio.assert_called_once_with(model="ollama:test", port=7444, open_browser=False)
 
     def test_packaged_studio_shell_is_served(self) -> None:
-        client = TestClient(create_app(store=self.store))
+        client = TestClient(create_app(store=self.store, workspace=self.workspace))
 
         response = client.get("/")
 

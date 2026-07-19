@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 
+import { saveOpenAIKey } from "../api";
 import { useStudioStore } from "../stores/studio";
 
 const emit = defineEmits<{ close: [] }>();
@@ -11,6 +12,11 @@ const [initialProvider, initialName] = studio.model.includes(":")
 const provider = ref(initialProvider === "openai" ? "openai" : "ollama");
 const name = ref(initialName || "qwen2.5-coder:7b");
 const candidate = computed(() => `${provider.value}:${name.value.trim()}`);
+const apiKey = ref("");
+const keySaved = ref(false);
+const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") emit("close"); };
+onMounted(() => window.addEventListener("keydown", closeOnEscape));
+onBeforeUnmount(() => window.removeEventListener("keydown", closeOnEscape));
 
 watch(provider, (value) => {
   name.value = value === "ollama" ? "qwen2.5-coder:7b" : "gpt-4.1-mini";
@@ -18,6 +24,11 @@ watch(provider, (value) => {
 });
 
 async function verify() {
+  if (provider.value === "openai" && apiKey.value) {
+    await saveOpenAIKey(apiKey.value);
+    apiKey.value = "";
+    keySaved.value = true;
+  }
   studio.setModel(candidate.value);
   try {
     await studio.verifyModel();
@@ -53,9 +64,14 @@ function save() {
         <span>Model name</span>
         <input v-model="name" autocomplete="off" placeholder="qwen2.5-coder:7b" @input="studio.modelStatus = null" />
       </label>
+      <label v-if="provider === 'openai'">
+        <span>API key</span>
+        <input v-model="apiKey" type="password" autocomplete="new-password" placeholder="Stored in your OS keyring" />
+        <small v-if="keySaved">Saved securely. The key is never returned to the browser.</small>
+      </label>
       <div class="environment-note">
         <template v-if="provider === 'ollama'">AskSQL discovers Ollama through <code>OLLAMA_BASE_URL</code> or localhost.</template>
-        <template v-else>Set <code>OPENAI_API_KEY</code> and optionally <code>OPENAI_BASE_URL</code> before launching Studio.</template>
+        <template v-else>The API key is read from <code>OPENAI_API_KEY</code> or your OS keyring. <code>OPENAI_BASE_URL</code> remains optional.</template>
       </div>
 
       <div v-if="studio.modelStatus" :class="['validation', studio.modelStatus.ready ? 'success' : 'failure']">

@@ -8,20 +8,21 @@ from typing import Any
 from urllib.error import URLError
 from urllib.parse import quote
 
+from asksql.secrets import get_secret
 from asksql.sql import clean_sql
 
-SYSTEM = """Write SQLite SQL.
+SYSTEM = """Write {dialect} SQL.
 Return only SQL, no markdown.
 Use only the provided schema.
 Add a small LIMIT when the user does not specify one."""
 
 
-def generate_sql(model: str, schema: str, question: str) -> str:
+def generate_sql(model: str, schema: str, question: str, dialect: str = "sqlite") -> str:
     provider, _, name = model.partition(":")
     if provider == "ollama":
-        return ollama(name or "qwen2.5-coder", schema, question)
+        return ollama(name or "qwen2.5-coder", schema, question, dialect)
     if provider == "openai":
-        return openai(name or "gpt-4.1-mini", schema, question)
+        return openai(name or "gpt-4.1-mini", schema, question, dialect)
     raise ValueError("model must look like ollama:name or openai:name")
 
 
@@ -35,9 +36,9 @@ def post_json(url: str, payload: dict[str, object], headers: dict[str, str] | No
         return json.loads(res.read().decode())
 
 
-def ollama(model: str, schema: str, question: str) -> str:
+def ollama(model: str, schema: str, question: str, dialect: str = "sqlite") -> str:
     base_url = ollama_base_url()
-    prompt = f"{SYSTEM}\n\nSchema:\n{schema}\n\nQuestion:\n{question}\n\nSQL:"
+    prompt = f"{SYSTEM.format(dialect=dialect)}\n\nSchema:\n{schema}\n\nQuestion:\n{question}\n\nSQL:"
     data = post_json(f"{base_url}/api/generate", {"model": model, "prompt": prompt, "stream": False})
     return clean_sql(str(data.get("response", "")))
 
@@ -105,7 +106,7 @@ def check_model(model: str) -> tuple[bool, str]:
                 return False, f"Ollama is reachable, but {name} is not installed."
             return True, f"Ollama is ready with {name}."
         if provider == "openai":
-            api_key = os.getenv("OPENAI_API_KEY")
+            api_key = get_secret("OPENAI_API_KEY")
             if not api_key:
                 return False, "OPENAI_API_KEY is not configured in the AskSQL environment."
             base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
@@ -121,8 +122,8 @@ def check_model(model: str) -> tuple[bool, str]:
     return False, "Provider must be ollama or openai."
 
 
-def openai(model: str, schema: str, question: str) -> str:
-    api_key = os.getenv("OPENAI_API_KEY")
+def openai(model: str, schema: str, question: str, dialect: str = "sqlite") -> str:
+    api_key = get_secret("OPENAI_API_KEY")
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY is required for openai:* models")
     base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
@@ -132,7 +133,7 @@ def openai(model: str, schema: str, question: str) -> str:
             "model": model,
             "temperature": 0,
             "messages": [
-                {"role": "system", "content": SYSTEM},
+                {"role": "system", "content": SYSTEM.format(dialect=dialect)},
                 {"role": "user", "content": f"Schema:\n{schema}\n\nQuestion:\n{question}"},
             ],
         },

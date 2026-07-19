@@ -6,6 +6,7 @@ import re
 import tempfile
 from pathlib import Path
 from threading import RLock
+from urllib.parse import urlparse
 
 from asksql.models import ConnectionProfile
 from asksql.sqlite import db_path
@@ -36,7 +37,7 @@ class ConnectionStore:
     def add(self, name: str, url: str) -> ConnectionProfile:
         with self._lock:
             validate_profile_name(name)
-            profile = ConnectionProfile(name, normalize_sqlite_url(url))
+            profile = ConnectionProfile(name, normalize_database_url(url))
             profiles = self._read()
             if any(existing.name == name for existing in profiles):
                 raise ConnectionStoreError(f"connection already exists: {name}")
@@ -48,7 +49,7 @@ class ConnectionStore:
         with self._lock:
             current = self.get(name)
             validate_profile_name(new_name)
-            profile = ConnectionProfile(new_name, normalize_sqlite_url(url))
+            profile = ConnectionProfile(new_name, normalize_database_url(url))
             profiles = self._read()
             if new_name != current.name and any(existing.name == new_name for existing in profiles):
                 raise ConnectionStoreError(f"connection already exists: {new_name}")
@@ -119,3 +120,15 @@ def normalize_sqlite_url(url: str) -> str:
     if not path.is_file():
         raise ConnectionStoreError(f"SQLite database does not exist: {path}")
     return f"sqlite://{path.as_posix()}"
+
+
+def normalize_database_url(url: str) -> str:
+    scheme = urlparse(url).scheme.lower()
+    if scheme == "sqlite":
+        return normalize_sqlite_url(url)
+    if scheme in {"postgres", "postgresql"}:
+        parsed = urlparse(url)
+        if not parsed.hostname or not parsed.path.strip("/"):
+            raise ConnectionStoreError("PostgreSQL URL requires a host and database name")
+        return url
+    raise ConnectionStoreError("supported connections are SQLite and PostgreSQL")

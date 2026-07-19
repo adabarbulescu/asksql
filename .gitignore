@@ -7,5 +7,7 @@ __pycache__/
 .test-venv/
 web/node_modules/
 web/*.tsbuildinfo
+web/playwright-report/
+web/test-results/
 dist/
 *.egg-info/

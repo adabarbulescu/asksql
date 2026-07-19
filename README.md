@@ -10,7 +10,7 @@ Local models by default. API models when you want them. SQL shown before it runs
 asksql ask sqlite://app.db "Which customers spent the most last month?"
 ```
 
-`asksql` starts narrow: SQLite, Ollama, OpenAI-compatible APIs, and read-only SQL by default.
+`asksql` supports SQLite and PostgreSQL, Ollama and OpenAI-compatible APIs, and read-only SQL by default.
 
 ## Install
 
@@ -36,12 +36,13 @@ Launch AskSQL Studio, the local-first browser workspace:
 asksql ui
 ```
 
-Studio opens on `127.0.0.1` and uses your saved connections. Its first vertical slice includes a connection picker,
-schema explorer, natural-language SQL generation, editable SQL review, read-only execution, and a results grid. The
+Studio opens on `127.0.0.1` and uses your saved connections. It includes connection management, persistent query
+history, schema search and context selection, natural-language SQL generation, editable SQL review, cancellable
+execution, safe write confirmation, exports, query plans, and a virtualized results grid. The
 database stays on your machine; model providers receive schema and the question, never result rows.
 
-No terminal setup is required after launch. Studio can register, validate, rename, and remove existing SQLite
-connections, or create a disposable demo profile. Removing a profile never removes its database file. The model
+No terminal setup is required after launch. Studio can register, validate, rename, and remove SQLite or PostgreSQL
+connections, or create a disposable demo profile. Removing a profile never removes its database. The model
 selector supports Ollama and OpenAI-compatible providers and checks availability without generating a completion.
 
 Save a real SQLite database once, then use its name everywhere:
@@ -67,8 +68,16 @@ asksql connections remove local
 ```
 
 Connection profiles are stored in `$XDG_CONFIG_HOME/asksql/connections.json` (or
-`~/.config/asksql/connections.json`) with private file permissions. Set
-`ASKSQL_CONFIG_DIR` to override the directory. Profiles support existing SQLite databases only.
+`~/.config/asksql/connections.json`) with private file permissions. Query metadata is kept in a private local
+`workspace.db`; result rows are not persisted. Set `ASKSQL_CONFIG_DIR` to override the directory.
+
+PostgreSQL support uses the optional driver:
+
+```bash
+pipx install 'asksql[postgres]'
+asksql connections add warehouse --url postgresql://user:password@localhost/warehouse
+asksql --yes run warehouse "select current_database()"
+```
 
 Try the built-in demo:
 
@@ -94,7 +103,7 @@ Run read-only SQL directly:
 asksql --yes run demo "select name from customers order by id"
 ```
 
-Write to an existing SQLite database with explicit opt-in:
+Write to an existing database with explicit opt-in:
 
 ```bash
 asksql run --write sqlite://app.db "update users set active = 0 where last_seen < '2025-01-01'"
@@ -181,7 +190,7 @@ asksql demo "which customers spent the most?"
 - Generated SQL requires confirmation unless `--yes` is set.
 - AI-generated SQL remains read-only; manual writes require `run --write`.
 - Queries are limited to 200 rows by default.
-- SQLite execution times out after 30 seconds by default.
+- Database execution times out after 30 seconds by default.
 - `Ctrl+C` cancels a running TUI query.
 - Model calls receive schema only, not data rows.
 
@@ -191,4 +200,4 @@ asksql demo "which customers spent the most?"
 - No dashboard builder.
 - No migration tool.
 - No agentic multi-step database automation.
-- No giant database adapter matrix.
+- No giant database adapter matrix; v0.3 deliberately supports SQLite and PostgreSQL.

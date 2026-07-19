@@ -8,11 +8,14 @@ from urllib.parse import unquote, urlparse
 from asksql.models import (
     CancellationToken,
     Column,
+    DatabaseObject,
     ForeignKey,
+    IndexSchema,
     MutationResult,
     QueryCancelledError,
     QueryResult,
     QueryTimeoutError,
+    SchemaDetails,
     TableSchema,
 )
 
@@ -37,9 +40,11 @@ def read_write_uri(db_url: str) -> str:
     return f"file:{db_path(db_url).resolve().as_posix()}?mode=rw"
 
 
-def schema(db_url: str) -> str:
+def schema(db_url: str, table_names: list[str] | None = None) -> str:
     lines = []
     for table in inspect(db_url).values():
+        if table_names is not None and table.name not in table_names:
+            continue
         lines.append(f"{table.name}(")
         for column in table.columns:
             parts = [f"  {column.name} {column.type}".rstrip()]
@@ -73,6 +78,39 @@ def inspect(db_url: str) -> dict[str, TableSchema]:
             )
             for (table,) in rows
         }
+
+
+def inspect_details(db_url: str) -> SchemaDetails:
+    with sqlite3.connect(read_only_uri(db_url), uri=True) as conn:
+        base = inspect(db_url)
+        tables: dict[str, TableSchema] = {}
+        for name, table in base.items():
+            indexes = []
+            for index_row in conn.execute(f"pragma index_list({quote_identifier(name)})").fetchall():
+                index_name = str(index_row[1])
+                columns = [
+                    str(row[2])
+                    for row in conn.execute(f"pragma index_info({quote_identifier(index_name)})").fetchall()
+                    if row[2] is not None
+                ]
+                indexes.append(IndexSchema(index_name, columns, bool(index_row[2])))
+            row_count = int(conn.execute(f"select count(*) from {quote_identifier(name)}").fetchone()[0])
+            tables[name] = TableSchema(name, table.columns, table.foreign_keys, indexes, row_count)
+        objects = conn.execute(
+            """
+            select name, type, tbl_name, sql from sqlite_master
+            where type in ('view', 'trigger') and name not like 'sqlite_%'
+            order by type, name
+            """
+        ).fetchall()
+    views = [DatabaseObject(row[0], row[1], row[2], row[3]) for row in objects if row[1] == "view"]
+    triggers = [DatabaseObject(row[0], row[1], row[2], row[3]) for row in objects if row[1] == "trigger"]
+    return SchemaDetails(tables, views, triggers)
+
+
+def explain_query_plan(db_url: str, sql: str) -> list[tuple[object, ...]]:
+    with sqlite3.connect(read_only_uri(db_url), uri=True) as conn:
+        return conn.execute(f"explain query plan {sql}").fetchall()
 
 
 def _foreign_key_for_column(table: TableSchema, column: str) -> ForeignKey | None:

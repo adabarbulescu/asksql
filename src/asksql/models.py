@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from threading import Event, Lock
 from typing import Callable
@@ -31,6 +31,30 @@ class TableSchema:
     name: str
     columns: list[Column]
     foreign_keys: list[ForeignKey]
+    indexes: list[IndexSchema] = field(default_factory=list)
+    row_count: int | None = None
+
+
+@dataclass(frozen=True)
+class IndexSchema:
+    name: str
+    columns: list[str]
+    unique: bool
+
+
+@dataclass(frozen=True)
+class DatabaseObject:
+    name: str
+    kind: str
+    table: str | None
+    sql: str | None
+
+
+@dataclass(frozen=True)
+class SchemaDetails:
+    tables: dict[str, TableSchema]
+    views: list[DatabaseObject]
+    triggers: list[DatabaseObject]
 
 
 @dataclass(frozen=True)

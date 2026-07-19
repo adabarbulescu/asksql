@@ -11,6 +11,7 @@ from rich.prompt import Confirm
 from rich.syntax import Syntax
 from rich.table import Table
 
+from asksql.adapters import adapter_for
 from asksql.connections import ConnectionStore, ConnectionStoreError
 from asksql.demo import create_demo_db
 from asksql.export import format_result
@@ -18,7 +19,7 @@ from asksql.llm import ollama_models
 from asksql.models import ExecutionStatus, MutationResult, QueryExecution, QueryResult
 from asksql.service import QueryService
 from asksql.sql import pretty_sql
-from asksql.sqlite import DEFAULT_LIMIT, DEFAULT_TIMEOUT, MAX_LIMIT, inspect, schema
+from asksql.sqlite import DEFAULT_LIMIT, DEFAULT_TIMEOUT, MAX_LIMIT
 from asksql.studio import run_studio
 from asksql.tui import pick_connection, run_tui
 
@@ -71,9 +72,9 @@ def build_parser() -> argparse.ArgumentParser:
     connections = subparsers.add_parser("connections", help="manage saved database connections")
     connection_commands = connections.add_subparsers(dest="connection_command")
 
-    add_connection = connection_commands.add_parser("add", help="save an existing SQLite database")
+    add_connection = connection_commands.add_parser("add", help="save a SQLite or PostgreSQL database")
     add_connection.add_argument("name")
-    add_connection.add_argument("--url", required=True, help="SQLite URL, for example sqlite://app.db")
+    add_connection.add_argument("--url", required=True, help="SQLite or PostgreSQL URL")
     add_connection.set_defaults(func=command_connections_add)
 
     list_connections = connection_commands.add_parser("list", help="list saved connections")
@@ -111,7 +112,7 @@ def base_parser() -> argparse.ArgumentParser:
     parser.add_argument("--force", action="store_true", help="overwrite --output if it exists")
     parser.add_argument("--limit", type=result_limit, default=DEFAULT_LIMIT, help=f"maximum result rows, 1-{MAX_LIMIT}")
     parser.add_argument(
-        "--timeout", type=query_timeout, default=DEFAULT_TIMEOUT, help="SQLite execution timeout in seconds"
+        "--timeout", type=query_timeout, default=DEFAULT_TIMEOUT, help="database execution timeout in seconds"
     )
     parser.add_argument("-y", "--yes", action="store_true", help="run read-only SQL without prompting")
     parser.add_argument("--show-schema", action="store_true", help="print the schema sent to the model")
@@ -252,7 +253,7 @@ def command_ask(args: argparse.Namespace) -> int:
     try:
         db_url = resolve_db_url(args.database)
         service = QueryService(db_url, args.model)
-        db_schema = schema(db_url)
+        db_schema = adapter_for(db_url).schema()
         sql_console = console if args.format == "table" and not args.output else error_console
         if args.show_schema:
             sql_console.print(Panel(db_schema, title="Schema", border_style="blue"))
@@ -438,7 +439,7 @@ def run_sql(
 def resolve_db_url(database: str) -> str:
     if database == "demo":
         return create_demo_db()
-    if database.startswith("sqlite://"):
+    if database.startswith(("sqlite://", "postgres://", "postgresql://")):
         return database
     return ConnectionStore().get(database).url
 
@@ -476,7 +477,7 @@ def show_models() -> int:
 def show_schema(db_url: str) -> int:
     try:
         db_url = resolve_db_url(db_url)
-        tables = inspect(db_url)
+        tables = adapter_for(db_url).inspect_details().tables
     except Exception as exc:
         error_console.print(f"[red]Could not inspect schema:[/] {exc}")
         return 1

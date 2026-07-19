@@ -5,9 +5,10 @@ from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.widgets import DataTable, Footer, Header, Input, Label, ListItem, ListView, Static, TextArea, Tree
 
+from asksql.adapters import adapter_for
 from asksql.models import CancellationToken, ConnectionProfile, ExecutionStatus, QueryExecution, QueryResult
 from asksql.service import QueryService
-from asksql.sqlite import DEFAULT_LIMIT, DEFAULT_TIMEOUT, inspect, preview_table, quote_identifier
+from asksql.sqlite import DEFAULT_LIMIT, DEFAULT_TIMEOUT, quote_identifier
 
 
 class ConnectionListItem(ListItem):
@@ -258,7 +259,8 @@ class AskSqlApp(App[None]):
     def _preview(self, table: str, preview_id: int) -> None:
         sql = f"select * from {quote_identifier(table)} limit 50"
         try:
-            columns, rows = preview_table(self.db_url, table)
+            result = adapter_for(self.db_url).query(sql, 50, self.timeout, self._cancellation)
+            columns, rows = result.columns, result.rows
         except Exception as exc:
             self.call_from_thread(self._finish_preview, preview_id, table, sql, None, None, str(exc))
             return
@@ -291,7 +293,7 @@ class AskSqlApp(App[None]):
         tree = self.query_one("#schema", Tree)
         tree.clear()
         tree.root.label = "Schema"
-        for table, table_schema in inspect(self.db_url).items():
+        for table, table_schema in adapter_for(self.db_url).inspect_details().tables.items():
             table_node = tree.root.add(table, data=table)
             for column in table_schema.columns:
                 foreign_key = next((fk for fk in table_schema.foreign_keys if fk.column == column.name), None)
@@ -303,7 +305,7 @@ class AskSqlApp(App[None]):
 
     def _schema_text(self) -> str:
         lines = ["Schema", ""]
-        for table, table_schema in inspect(self.db_url).items():
+        for table, table_schema in adapter_for(self.db_url).inspect_details().tables.items():
             lines.append(table)
             for column in table_schema.columns:
                 foreign_key = next((fk for fk in table_schema.foreign_keys if fk.column == column.name), None)

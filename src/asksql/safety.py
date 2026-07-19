@@ -36,17 +36,17 @@ DANGEROUS_NODES = (
 )
 
 
-def is_read_only(sql: str) -> bool:
+def is_read_only(sql: str, dialect: str = "sqlite") -> bool:
     sql = sql.strip().rstrip(";").strip()
     if not sql:
         return False
     lowered = sql.lower()
     if lowered.startswith("explain query plan "):
-        return is_read_only(sql[19:])
+        return is_read_only(sql[19:], dialect)
     if lowered.startswith("explain "):
-        return is_read_only(sql[8:])
+        return is_read_only(sql[8:], dialect)
     try:
-        statements = sqlglot.parse(sql, read="sqlite")
+        statements = sqlglot.parse(sql, read=dialect)
     except ParseError:
         return False
     if len(statements) != 1:
@@ -55,13 +55,13 @@ def is_read_only(sql: str) -> bool:
     return bool(statement and _is_read_only_expression(cast(exp.Expression, statement)))
 
 
-def is_write(sql: str) -> bool:
+def is_write(sql: str, dialect: str = "sqlite") -> bool:
     """Return whether SQL is one supported, explicitly mutating SQLite statement."""
     sql = sql.strip().rstrip(";").strip()
     if not sql:
         return False
     try:
-        statements = sqlglot.parse(sql, read="sqlite")
+        statements = sqlglot.parse(sql, read=dialect)
     except ParseError:
         return False
     if len(statements) != 1 or statements[0] is None:

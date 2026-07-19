@@ -1,21 +1,18 @@
 # Changelog
 
-## Unreleased
-
-- Add AskSQL Studio, a local-first Vue workspace launched with `asksql ui`.
-- Add saved-connection selection, schema exploration, AI SQL generation, SQL review, and read-only result browsing.
-- Add a localhost-only FastAPI adapter over the existing query service.
-- Add zero-terminal Studio onboarding with validated connection management, a one-click demo, and model health checks.
-
 All notable changes to this project are documented in this file.
 
-## Unreleased
+## [0.3.0] - 2026-07-19
 
-### Added
+- Added AskSQL Studio query history, pinning, search, restore, and local private workspace storage.
+- Added asynchronous execution, cancellation, streaming generation state, CSV/JSON/Markdown export, and virtualized results.
+- Added token-bound, expiring, one-time write confirmation with a persistent local audit trail.
+- Added schema search and AI context selection, indexes, foreign keys, row estimates, views, triggers, and query plans.
+- Added a database adapter boundary and PostgreSQL support for Studio, CLI, and TUI.
+- Added OS-keyring storage for provider secrets, Vue component tests, accessibility improvements, and Tauri desktop workflows.
 
-- Saved SQLite connection profiles with add, list, show, and remove commands.
-- Named connections accepted by ask, run, schema, and TUI commands.
-- A zero-argument connection picker that launches the TUI.
+The desktop workflow requires private Tauri signing credentials. Source, Python packages, and unsigned local desktop
+builds do not require those credentials.
 
 ## [0.2.0] - 2026-07-19
 
@@ -36,9 +33,10 @@ All notable changes to this project are documented in this file.
 
 ### Safety
 
-- Only read-only SQL is accepted.
+- Only read-only SQL is accepted by default.
 - SQLite timeout and cancellation outcomes are classified deterministically.
 - Model calls receive database schema, not table data.
 - CLI failures use stable exit codes for refusal, timeout, cancellation, and general errors.
 
+[0.3.0]: https://github.com/adabarbulescu/asksql/releases/tag/v0.3.0
 [0.2.0]: https://github.com/adabarbulescu/asksql/releases/tag/v0.2.0

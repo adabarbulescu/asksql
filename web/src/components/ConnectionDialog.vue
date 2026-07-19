@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 
 import { useStudioStore } from "../stores/studio";
 import type { ConnectionProfile, ConnectionTest } from "../types";
@@ -13,6 +13,9 @@ const testing = ref(false);
 const testResult = ref<ConnectionTest | null>(null);
 const localError = ref("");
 const canSave = computed(() => name.value.trim() && url.value.trim() && !testing.value && !studio.busy);
+const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") emit("close"); };
+onMounted(() => window.addEventListener("keydown", closeOnEscape));
+onBeforeUnmount(() => window.removeEventListener("keydown", closeOnEscape));
 
 async function test() {
   testing.value = true;
@@ -43,7 +46,7 @@ async function save() {
   <div class="modal-backdrop" @mousedown.self="$emit('close')">
     <section class="dialog connection-dialog" role="dialog" aria-modal="true" aria-labelledby="connection-title">
       <div class="dialog-heading">
-        <div><span class="dialog-icon">◉</span><div><h2 id="connection-title">{{ profile ? "Edit connection" : "Add a database" }}</h2><p>Register an existing SQLite file on this machine.</p></div></div>
+        <div><span class="dialog-icon">◉</span><div><h2 id="connection-title">{{ profile ? "Edit connection" : "Add a database" }}</h2><p>Register SQLite or connect to PostgreSQL.</p></div></div>
         <button aria-label="Close" @click="$emit('close')">×</button>
       </div>
 
@@ -54,9 +57,9 @@ async function save() {
           <small>Letters, numbers, dots, underscores, and hyphens.</small>
         </label>
         <label>
-          <span>SQLite path or URL</span>
-          <input v-model="url" maxlength="4096" autocomplete="off" placeholder="/home/ada/data/app.db" @input="testResult = null" />
-          <small>The file must already exist. AskSQL never uploads or creates it.</small>
+          <span>Database path or URL</span>
+          <input v-model="url" maxlength="4096" autocomplete="off" placeholder="/data/app.db or postgresql://host/database" @input="testResult = null" />
+          <small>SQLite files must exist. PostgreSQL credentials stay on this machine.</small>
         </label>
 
         <div v-if="testResult" class="validation success">

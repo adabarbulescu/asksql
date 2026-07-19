@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "asksql"
-version = "0.2.0"
-description = "Ask your database questions from the terminal."
+version = "0.3.0"
+description = "Ask SQLite and PostgreSQL questions from Studio, the terminal, or the TUI."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
@@ -24,6 +24,7 @@ classifiers = [
 ]
 dependencies = [
     "fastapi>=0.115,<1",
+    "keyring>=25,<26",
     "rich>=13.7",
     "sqlglot>=30.0,<31",
     "textual>=8.2",
@@ -40,6 +41,7 @@ dev = [
     "setuptools>=69",
     "twine>=5.1",
 ]
+postgres = ["psycopg[binary]>=3.2,<4"]
 
 [project.urls]
 Homepage = "https://github.com/adabarbulescu/asksql"
