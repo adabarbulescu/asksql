@@ -9,12 +9,14 @@ from typing import Annotated, Any
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi import Path as ApiPath
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from asksql.connections import ConnectionStore, ConnectionStoreError
+from asksql.connections import ConnectionStore, ConnectionStoreError, normalize_sqlite_url
+from asksql.demo import create_demo_db
+from asksql.llm import check_model
 from asksql.models import ConnectionProfile, ExecutionStatus, MutationResult, QueryResult
 from asksql.service import QueryService
 from asksql.sqlite import DEFAULT_LIMIT, DEFAULT_TIMEOUT, MAX_LIMIT, inspect
@@ -35,6 +37,19 @@ class ExecuteRequest(BaseModel):
     timeout: float = Field(default=DEFAULT_TIMEOUT, gt=0, le=3600)
 
 
+class ConnectionRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    url: str = Field(min_length=1, max_length=4096)
+
+
+class ConnectionTestRequest(BaseModel):
+    url: str = Field(min_length=1, max_length=4096)
+
+
+class ModelCheckRequest(BaseModel):
+    model: str = Field(min_length=1, max_length=200)
+
+
 def create_app(*, store: ConnectionStore | None = None, static_dir: Path | None = None) -> FastAPI:
     connection_store = store or ConnectionStore()
     assets = static_dir or Path(__file__).with_name("static")
@@ -52,6 +67,52 @@ def create_app(*, store: ConnectionStore | None = None, static_dir: Path | None 
         except ConnectionStoreError as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         return {"connections": [{"name": profile.name, "url": profile.url} for profile in profiles]}
+
+    @app.post("/api/connections/test")
+    def test_connection(request: ConnectionTestRequest) -> dict[str, object]:
+        url, table_count = _validate_database(request.url)
+        return {"valid": True, "url": url, "tables": table_count}
+
+    @app.post("/api/connections", status_code=201)
+    def add_connection(request: ConnectionRequest) -> dict[str, str]:
+        url, _ = _validate_database(request.url)
+        try:
+            profile = connection_store.add(request.name, url)
+        except ConnectionStoreError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return _profile_payload(profile)
+
+    @app.post("/api/connections/demo")
+    def add_demo_connection() -> dict[str, str]:
+        try:
+            profile = connection_store.get("demo")
+            inspect(profile.url)
+            return _profile_payload(profile)
+        except ConnectionStoreError:
+            pass
+        except Exception:
+            connection_store.remove("demo")
+        demo_path = connection_store.path.parent / "demo.db"
+        profile = connection_store.add("demo", create_demo_db(demo_path))
+        return _profile_payload(profile)
+
+    @app.put("/api/connections/{name}")
+    def update_connection(name: Annotated[str, ApiPath(min_length=1)], request: ConnectionRequest) -> dict[str, str]:
+        url, _ = _validate_database(request.url)
+        try:
+            profile = connection_store.update(name, request.name, url)
+        except ConnectionStoreError as exc:
+            status = 404 if str(exc).startswith("unknown connection") else 409
+            raise HTTPException(status_code=status, detail=str(exc)) from exc
+        return _profile_payload(profile)
+
+    @app.delete("/api/connections/{name}", status_code=204)
+    def remove_connection(name: Annotated[str, ApiPath(min_length=1)]) -> Response:
+        try:
+            connection_store.remove(name)
+        except ConnectionStoreError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return Response(status_code=204)
 
     @app.get("/api/connections/{name}/schema")
     def connection_schema(name: Annotated[str, ApiPath(min_length=1)]) -> dict[str, Any]:
@@ -90,6 +151,11 @@ def create_app(*, store: ConnectionStore | None = None, static_dir: Path | None 
         except Exception as exc:
             raise HTTPException(status_code=502, detail=f"SQL generation failed: {exc}") from exc
         return {"question": generated.question, "sql": generated.sql, "model": generated.model}
+
+    @app.post("/api/models/check")
+    def model_check(request: ModelCheckRequest) -> dict[str, object]:
+        ready, detail = check_model(request.model)
+        return {"model": request.model, "ready": ready, "detail": detail}
 
     @app.post("/api/query/execute")
     def execute(request: ExecuteRequest) -> dict[str, Any]:
@@ -151,6 +217,22 @@ def _profile(store: ConnectionStore, name: str) -> ConnectionProfile:
         return store.get(name)
     except ConnectionStoreError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+def _validate_database(value: str) -> tuple[str, int]:
+    url = value.strip()
+    if not url.startswith("sqlite://"):
+        url = f"sqlite://{url}"
+    try:
+        normalized = normalize_sqlite_url(url)
+        tables = inspect(normalized)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Could not open SQLite database: {exc}") from exc
+    return normalized, len(tables)
+
+
+def _profile_payload(profile: ConnectionProfile) -> dict[str, str]:
+    return {"name": profile.name, "url": profile.url}
 
 
 def _json_value(value: object) -> object:

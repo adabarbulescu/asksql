@@ -1,9 +1,25 @@
 import { defineStore } from "pinia";
 
-import { executeSql, fetchConnections, fetchSchema, generateSql } from "../api";
-import type { ConnectionProfile, QueryExecution, TableSchema } from "../types";
+import {
+  addConnection,
+  addDemoConnection,
+  checkModel,
+  executeSql,
+  fetchConnections,
+  fetchSchema,
+  generateSql,
+  removeConnection,
+  testConnection,
+  updateConnection,
+} from "../api";
+import type { ConnectionProfile, ConnectionTest, ModelStatus, QueryExecution, TableSchema } from "../types";
 
-type Activity = "connections" | "schema" | "generate" | "execute" | null;
+type Activity = "connections" | "schema" | "generate" | "execute" | "save-connection" | "demo" | "model" | null;
+
+const initialModel =
+  new URLSearchParams(window.location.search).get("model") ??
+  window.localStorage.getItem("asksql-model") ??
+  "ollama:qwen2.5-coder:7b";
 
 export const useStudioStore = defineStore("studio", {
   state: () => ({
@@ -12,7 +28,8 @@ export const useStudioStore = defineStore("studio", {
     tables: [] as TableSchema[],
     question: "",
     sql: "select 1 as ready",
-    model: new URLSearchParams(window.location.search).get("model") ?? "ollama:qwen2.5-coder:7b",
+    model: initialModel,
+    modelStatus: null as ModelStatus | null,
     execution: null as QueryExecution | null,
     activity: null as Activity,
     error: "",
@@ -36,6 +53,17 @@ export const useStudioStore = defineStore("studio", {
         this.error = message(error);
       } finally {
         this.activity = null;
+      }
+    },
+    async reloadConnections(selectedName?: string) {
+      this.connections = await fetchConnections();
+      const target = selectedName || this.selectedConnection || this.connections[0]?.name;
+      if (target && this.connections.some((item) => item.name === target)) {
+        await this.selectConnection(target);
+      } else {
+        this.selectedConnection = "";
+        this.tables = [];
+        this.execution = null;
       }
     },
     async selectConnection(name: string) {
@@ -79,6 +107,77 @@ export const useStudioStore = defineStore("studio", {
       } finally {
         this.activity = null;
       }
+    },
+    async testDatabase(url: string): Promise<ConnectionTest> {
+      this.error = "";
+      try {
+        return await testConnection(url);
+      } catch (error) {
+        this.error = message(error);
+        throw error;
+      }
+    },
+    async saveConnection(name: string, url: string, originalName?: string) {
+      this.activity = "save-connection";
+      this.error = "";
+      try {
+        const profile = originalName
+          ? await updateConnection(originalName, name, url)
+          : await addConnection(name, url);
+        await this.reloadConnections(profile.name);
+        return profile;
+      } catch (error) {
+        this.error = message(error);
+        throw error;
+      } finally {
+        this.activity = null;
+      }
+    },
+    async deleteConnection(name: string) {
+      this.activity = "save-connection";
+      this.error = "";
+      try {
+        await removeConnection(name);
+        this.selectedConnection = "";
+        await this.reloadConnections();
+      } catch (error) {
+        this.error = message(error);
+        throw error;
+      } finally {
+        this.activity = null;
+      }
+    },
+    async useDemo() {
+      this.activity = "demo";
+      this.error = "";
+      try {
+        const profile = await addDemoConnection();
+        await this.reloadConnections(profile.name);
+      } catch (error) {
+        this.error = message(error);
+        throw error;
+      } finally {
+        this.activity = null;
+      }
+    },
+    async verifyModel(): Promise<ModelStatus> {
+      this.activity = "model";
+      this.error = "";
+      this.modelStatus = null;
+      try {
+        this.modelStatus = await checkModel(this.model);
+        return this.modelStatus;
+      } catch (error) {
+        this.error = message(error);
+        throw error;
+      } finally {
+        this.activity = null;
+      }
+    },
+    setModel(model: string) {
+      this.model = model;
+      this.modelStatus = null;
+      window.localStorage.setItem("asksql-model", model);
     },
     previewTable(table: TableSchema) {
       this.sql = `select *\nfrom "${table.name.replaceAll('"', '""')}"\nlimit 50`;

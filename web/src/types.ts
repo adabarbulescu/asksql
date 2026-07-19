@@ -3,6 +3,18 @@ export interface ConnectionProfile {
   url: string;
 }
 
+export interface ConnectionTest {
+  valid: boolean;
+  url: string;
+  tables: number;
+}
+
+export interface ModelStatus {
+  model: string;
+  ready: boolean;
+  detail: string;
+}
+
 export interface Column {
   name: string;
   type: string;

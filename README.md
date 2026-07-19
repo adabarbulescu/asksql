@@ -40,6 +40,10 @@ Studio opens on `127.0.0.1` and uses your saved connections. Its first vertical 
 schema explorer, natural-language SQL generation, editable SQL review, read-only execution, and a results grid. The
 database stays on your machine; model providers receive schema and the question, never result rows.
 
+No terminal setup is required after launch. Studio can register, validate, rename, and remove existing SQLite
+connections, or create a disposable demo profile. Removing a profile never removes its database file. The model
+selector supports Ollama and OpenAI-compatible providers and checks availability without generating a completion.
+
 Save a real SQLite database once, then use its name everywhere:
 
 ```bash

@@ -5,9 +5,12 @@ import tempfile
 from pathlib import Path
 
 
-def create_demo_db() -> str:
-    with tempfile.NamedTemporaryFile(prefix="asksql-demo-", suffix=".db", delete=False) as file:
-        path = Path(file.name)
+def create_demo_db(path: Path | None = None) -> str:
+    if path is None:
+        with tempfile.NamedTemporaryFile(prefix="asksql-demo-", suffix=".db", delete=False) as file:
+            path = Path(file.name)
+    else:
+        path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(path) as conn:
         conn.executescript(
             """
@@ -45,4 +48,5 @@ def create_demo_db() -> str:
                 (3, 2, 75.25, "2026-07-12"),
             ],
         )
+    path.chmod(0o600)
     return f"sqlite://{path}"

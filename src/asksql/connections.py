@@ -5,6 +5,7 @@ import os
 import re
 import tempfile
 from pathlib import Path
+from threading import RLock
 
 from asksql.models import ConnectionProfile
 from asksql.sqlite import db_path
@@ -21,6 +22,7 @@ class ConnectionStoreError(ValueError):
 class ConnectionStore:
     def __init__(self, path: Path | None = None) -> None:
         self.path = path or config_directory() / "connections.json"
+        self._lock = RLock()
 
     def profiles(self) -> list[ConnectionProfile]:
         return sorted(self._read(), key=lambda profile: profile.name.casefold())
@@ -32,19 +34,32 @@ class ConnectionStore:
         return profile
 
     def add(self, name: str, url: str) -> ConnectionProfile:
-        validate_profile_name(name)
-        profile = ConnectionProfile(name, normalize_sqlite_url(url))
-        profiles = self._read()
-        if any(existing.name == name for existing in profiles):
-            raise ConnectionStoreError(f"connection already exists: {name}")
-        profiles.append(profile)
-        self._write(profiles)
-        return profile
+        with self._lock:
+            validate_profile_name(name)
+            profile = ConnectionProfile(name, normalize_sqlite_url(url))
+            profiles = self._read()
+            if any(existing.name == name for existing in profiles):
+                raise ConnectionStoreError(f"connection already exists: {name}")
+            profiles.append(profile)
+            self._write(profiles)
+            return profile
+
+    def update(self, name: str, new_name: str, url: str) -> ConnectionProfile:
+        with self._lock:
+            current = self.get(name)
+            validate_profile_name(new_name)
+            profile = ConnectionProfile(new_name, normalize_sqlite_url(url))
+            profiles = self._read()
+            if new_name != current.name and any(existing.name == new_name for existing in profiles):
+                raise ConnectionStoreError(f"connection already exists: {new_name}")
+            self._write([profile if existing.name == name else existing for existing in profiles])
+            return profile
 
     def remove(self, name: str) -> ConnectionProfile:
-        profile = self.get(name)
-        self._write([existing for existing in self._read() if existing.name != name])
-        return profile
+        with self._lock:
+            profile = self.get(name)
+            self._write([existing for existing in self._read() if existing.name != name])
+            return profile
 
     def _read(self) -> list[ConnectionProfile]:
         if not self.path.exists():

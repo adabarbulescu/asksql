@@ -1,16 +1,52 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 
+import ConnectionDialog from "./components/ConnectionDialog.vue";
+import ModelDialog from "./components/ModelDialog.vue";
 import ResultsGrid from "./components/ResultsGrid.vue";
 import SchemaTree from "./components/SchemaTree.vue";
 import SqlEditor from "./components/SqlEditor.vue";
 import { useStudioStore } from "./stores/studio";
+import type { ConnectionProfile } from "./types";
 
 const studio = useStudioStore();
 const activeTab = ref<"results" | "messages">("results");
+const connectionDialog = ref(false);
+const editingConnection = ref<ConnectionProfile>();
+const modelDialog = ref(false);
+const deletingConnection = ref<ConnectionProfile>();
 const rowCount = computed(() => studio.execution?.result?.rows.length ?? 0);
 
 onMounted(() => studio.initialise());
+
+function openAddConnection() {
+  editingConnection.value = undefined;
+  connectionDialog.value = true;
+}
+
+function openEditConnection() {
+  if (!studio.selectedProfile) return;
+  editingConnection.value = studio.selectedProfile;
+  connectionDialog.value = true;
+}
+
+async function confirmDelete() {
+  if (!deletingConnection.value) return;
+  try {
+    await studio.deleteConnection(deletingConnection.value.name);
+    deletingConnection.value = undefined;
+  } catch {
+    // The store exposes the actionable error in the workspace.
+  }
+}
+
+async function useDemo() {
+  try {
+    await studio.useDemo();
+  } catch {
+    // The store exposes the actionable error in the onboarding card.
+  }
+}
 </script>
 
 <template>
@@ -20,12 +56,19 @@ onMounted(() => studio.initialise());
       <div class="topbar-center">
         <span class="pulse" /> Local workspace
       </div>
-      <div class="model-pill"><span>Model</span><input v-model="studio.model" aria-label="Model" /></div>
+      <button class="model-pill" @click="modelDialog = true">
+        <span :class="['model-state', { ready: studio.modelStatus?.ready }]" />
+        <div><small>Model</small><strong>{{ studio.model }}</strong></div>
+        <i>⌄</i>
+      </button>
     </header>
 
     <section class="workspace">
       <aside class="connections-panel">
-        <div class="panel-heading"><span>Connections</span><span class="count">{{ studio.connections.length }}</span></div>
+        <div class="panel-heading">
+          <span>Connections</span>
+          <div class="heading-actions"><span class="count">{{ studio.connections.length }}</span><button title="Add connection" @click="openAddConnection">＋</button></div>
+        </div>
         <div class="connections-list">
           <button
             v-for="connection in studio.connections"
@@ -38,22 +81,45 @@ onMounted(() => studio.initialise());
             <i />
           </button>
           <div v-if="!studio.connections.length && studio.activity !== 'connections'" class="no-connections">
-            <span>＋</span><strong>No connections yet</strong>
-            <code>asksql connections add local<br />--url sqlite://app.db</code>
+            <span>◉</span><strong>No connections yet</strong><small>Add an existing database or explore the demo.</small>
           </div>
         </div>
         <div class="local-note"><span>⌂</span><div><strong>Local-first</strong><small>Your data stays on this machine.</small></div></div>
       </aside>
 
       <aside class="schema-panel">
-        <div class="panel-heading"><span>Schema</span><button title="Refresh schema" @click="studio.selectedConnection && studio.selectConnection(studio.selectedConnection)">↻</button></div>
+        <div class="panel-heading">
+          <span>Schema</span>
+          <div class="heading-actions" v-if="studio.selectedProfile">
+            <button title="Edit connection" @click="openEditConnection">✎</button>
+            <button title="Remove connection" @click="deletingConnection = studio.selectedProfile">⌫</button>
+            <button title="Refresh schema" @click="studio.selectConnection(studio.selectedConnection)">↻</button>
+          </div>
+        </div>
         <div v-if="studio.selectedProfile" class="schema-database">
           <strong>{{ studio.selectedProfile.name }}</strong><small>{{ studio.tables.length }} tables</small>
         </div>
         <SchemaTree :tables="studio.tables" :loading="studio.activity === 'schema'" @preview="studio.previewTable" />
       </aside>
 
-      <section class="main-panel">
+      <section v-if="!studio.connections.length && studio.activity !== 'connections'" class="onboarding-panel">
+        <div class="onboarding-card">
+          <span class="onboarding-mark">A</span>
+          <p class="eyebrow">Welcome to AskSQL Studio</p>
+          <h1>Start with a database</h1>
+          <p>Connect an existing SQLite file. AskSQL validates it read-only and keeps all database access on this machine.</p>
+          <div class="onboarding-actions">
+            <button class="primary-button large" @click="openAddConnection"><span>＋</span> Add existing database</button>
+            <button class="secondary-button large" :disabled="studio.activity === 'demo'" @click="useDemo">
+              <span v-if="studio.activity === 'demo'" class="spinner" /><span v-else>◇</span> Explore the demo
+            </button>
+          </div>
+          <div class="trust-row"><span>✓ Existing files only</span><span>✓ Read-only by default</span><span>✓ No database uploads</span></div>
+          <div v-if="studio.error" class="error-banner"><span>!</span>{{ studio.error }}</div>
+        </div>
+      </section>
+
+      <section v-else class="main-panel">
         <div class="conversation">
           <div class="welcome-copy">
             <span class="spark">✦</span>
@@ -104,5 +170,24 @@ onMounted(() => studio.initialise());
         </section>
       </section>
     </section>
+
+    <ConnectionDialog
+      v-if="connectionDialog"
+      :profile="editingConnection"
+      @close="connectionDialog = false"
+      @saved="connectionDialog = false"
+    />
+    <ModelDialog v-if="modelDialog" @close="modelDialog = false" />
+    <div v-if="deletingConnection" class="modal-backdrop" @mousedown.self="deletingConnection = undefined">
+      <section class="dialog confirm-dialog" role="alertdialog" aria-modal="true">
+        <div class="danger-mark">⌫</div>
+        <h2>Remove {{ deletingConnection.name }}?</h2>
+        <p>The saved profile will be removed. The SQLite database file will not be changed or deleted.</p>
+        <div class="dialog-actions right">
+          <button class="ghost-button" @click="deletingConnection = undefined">Cancel</button>
+          <button class="danger-button" :disabled="studio.activity === 'save-connection'" @click="confirmDelete">Remove profile</button>
+        </div>
+      </section>
+    </div>
   </main>
 </template>

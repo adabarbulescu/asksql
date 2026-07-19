@@ -34,6 +34,48 @@ class StudioApiTest(unittest.TestCase):
         self.assertEqual(schema.json()["tables"][0]["name"], "projects")
         self.assertTrue(schema.json()["tables"][0]["columns"][0]["primaryKey"])
 
+    def test_connection_lifecycle_and_validation(self) -> None:
+        database = Path(self.directory.name) / "studio.db"
+
+        tested = self.client.post("/api/connections/test", json={"url": str(database)})
+        added = self.client.post("/api/connections", json={"name": "second", "url": str(database)})
+        updated = self.client.put("/api/connections/second", json={"name": "renamed", "url": f"sqlite://{database}"})
+        removed = self.client.delete("/api/connections/renamed")
+
+        self.assertEqual(tested.json()["tables"], 1)
+        self.assertEqual(added.status_code, 201)
+        self.assertEqual(updated.json()["name"], "renamed")
+        self.assertEqual(removed.status_code, 204)
+        self.assertFalse(database.stat().st_size == 0)
+        self.assertEqual(self.client.get("/api/connections/renamed/schema").status_code, 404)
+
+    def test_connection_rejects_missing_or_invalid_database(self) -> None:
+        missing = self.client.post(
+            "/api/connections", json={"name": "missing", "url": str(Path(self.directory.name) / "missing.db")}
+        )
+        invalid_path = Path(self.directory.name) / "invalid.db"
+        invalid_path.write_text("not sqlite", encoding="utf-8")
+        invalid = self.client.post("/api/connections/test", json={"url": str(invalid_path)})
+
+        self.assertEqual(missing.status_code, 400)
+        self.assertEqual(invalid.status_code, 400)
+
+    def test_adds_demo_once(self) -> None:
+        first = self.client.post("/api/connections/demo")
+        second = self.client.post("/api/connections/demo")
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(first.json(), second.json())
+        self.assertEqual(first.json()["name"], "demo")
+        self.assertEqual(first.json()["url"], f"sqlite://{Path(self.directory.name) / 'demo.db'}")
+
+    def test_checks_model_without_exposing_provider_secrets(self) -> None:
+        with patch("asksql.studio.server.check_model", return_value=(True, "ready")) as check:
+            response = self.client.post("/api/models/check", json={"model": "ollama:qwen"})
+
+        self.assertEqual(response.json(), {"model": "ollama:qwen", "ready": True, "detail": "ready"})
+        check.assert_called_once_with("ollama:qwen")
+
     def test_executes_read_only_query(self) -> None:
         response = self.client.post(
             "/api/query/execute",

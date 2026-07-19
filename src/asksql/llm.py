@@ -6,6 +6,7 @@ import subprocess
 import urllib.request
 from typing import Any
 from urllib.error import URLError
+from urllib.parse import quote
 
 from asksql.sql import clean_sql
 
@@ -90,6 +91,34 @@ def _wsl_urls() -> list[str]:
 def get_json(url: str) -> dict[str, Any]:
     with urllib.request.urlopen(url, timeout=10) as res:
         return json.loads(res.read().decode())
+
+
+def check_model(model: str) -> tuple[bool, str]:
+    provider, separator, name = model.partition(":")
+    if not separator or not name:
+        return False, "Model must look like ollama:name or openai:name."
+    try:
+        if provider == "ollama":
+            models = ollama_models()
+            names = {str(item.get("name", "")) for item in models}
+            if name not in names and f"{name}:latest" not in names:
+                return False, f"Ollama is reachable, but {name} is not installed."
+            return True, f"Ollama is ready with {name}."
+        if provider == "openai":
+            api_key = os.getenv("OPENAI_API_KEY")
+            if not api_key:
+                return False, "OPENAI_API_KEY is not configured in the AskSQL environment."
+            base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+            request = urllib.request.Request(
+                f"{base_url}/models/{quote(name, safe='')}",
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+            with urllib.request.urlopen(request, timeout=10):
+                pass
+            return True, f"The OpenAI-compatible endpoint is ready with {name}."
+    except (OSError, URLError, TimeoutError, json.JSONDecodeError) as exc:
+        return False, f"Could not reach {provider}: {exc}"
+    return False, "Provider must be ollama or openai."
 
 
 def openai(model: str, schema: str, question: str) -> str:
