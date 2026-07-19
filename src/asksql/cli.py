@@ -163,6 +163,7 @@ def command_ask(args: argparse.Namespace) -> int:
     if execution.status != ExecutionStatus.SUCCEEDED:
         return print_execution_error(execution)
     assert execution.result is not None
+    assert isinstance(execution.result, QueryResult)
     return print_result(execution.result, args.format, args.output, args.force)
 
 
