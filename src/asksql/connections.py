@@ -22,7 +22,7 @@ class ConnectionStore:
     def __init__(self, path: Path | None = None) -> None:
         self.path = path or config_directory() / "connections.json"
 
-    def list(self) -> list[ConnectionProfile]:
+    def profiles(self) -> list[ConnectionProfile]:
         return sorted(self._read(), key=lambda profile: profile.name.casefold())
 
     def get(self, name: str) -> ConnectionProfile:

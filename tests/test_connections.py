@@ -32,10 +32,10 @@ class ConnectionStoreTest(unittest.TestCase):
 
         self.assertEqual(profile.name, "local")
         self.assertEqual(profile.url, f"sqlite://{self.database.resolve()}")
-        self.assertEqual(store.list(), [profile])
+        self.assertEqual(store.profiles(), [profile])
         self.assertEqual(store.get("local"), profile)
         self.assertEqual(store.remove("local"), profile)
-        self.assertEqual(store.list(), [])
+        self.assertEqual(store.profiles(), [])
 
     def test_store_is_private_and_versioned(self) -> None:
         store = ConnectionStore()

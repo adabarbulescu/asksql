@@ -143,7 +143,7 @@ def command_help(args: argparse.Namespace) -> int:
 
 def command_launch(args: argparse.Namespace) -> int:
     try:
-        profiles = ConnectionStore().list()
+        profiles = ConnectionStore().profiles()
     except ConnectionStoreError as exc:
         error_console.print(f"[red]Connection error:[/] {exc}")
         return 1
@@ -176,7 +176,7 @@ def command_connections_add(args: argparse.Namespace) -> int:
 
 def command_connections_list(args: argparse.Namespace) -> int:
     try:
-        profiles = ConnectionStore().list()
+        profiles = ConnectionStore().profiles()
     except ConnectionStoreError as exc:
         error_console.print(f"[red]Connection error:[/] {exc}")
         return 1
