@@ -5,7 +5,7 @@ from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.widgets import DataTable, Footer, Header, Input, Static, TextArea, Tree
 
-from asksql.models import CancellationToken, ExecutionStatus, QueryExecution
+from asksql.models import CancellationToken, ExecutionStatus, QueryExecution, QueryResult
 from asksql.service import QueryService
 from asksql.sqlite import DEFAULT_LIMIT, DEFAULT_TIMEOUT, inspect, preview_table, quote_identifier
 
@@ -208,6 +208,7 @@ class AskSqlApp(App[None]):
             self._set_status(f"Query failed: {execution.error}")
             return
         assert execution.result is not None
+        assert isinstance(execution.result, QueryResult)
         columns, rows, truncated = execution.result.columns, execution.result.rows, execution.result.truncated
         suffix = f"row limit reached: {self.limit}" if truncated else f"{len(rows)} rows"
         self._set_status(f"{source} - {suffix}")
