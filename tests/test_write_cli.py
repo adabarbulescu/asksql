@@ -22,18 +22,14 @@ class WriteCliTest(unittest.TestCase):
             self.assertEqual(conn.execute("select count(*) from items").fetchone(), (0,))
 
     def test_run_write_commits_with_double_opt_in(self) -> None:
-        exit_code = main(
-            ["--yes", "run", "--write", self.database, "insert into items(name) values ('committed')"]
-        )
+        exit_code = main(["--yes", "run", "--write", self.database, "insert into items(name) values ('committed')"])
 
         self.assertEqual(exit_code, 0)
         with sqlite3.connect(self.path) as conn:
             self.assertEqual(conn.execute("select name from items").fetchall(), [("committed",)])
 
     def test_run_write_rejects_structured_output(self) -> None:
-        exit_code = main(
-            ["--yes", "--format", "json", "run", "--write", self.database, "delete from items"]
-        )
+        exit_code = main(["--yes", "--format", "json", "run", "--write", self.database, "delete from items"])
 
         self.assertEqual(exit_code, 1)
 
