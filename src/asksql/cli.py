@@ -19,11 +19,12 @@ from asksql.models import ExecutionStatus, MutationResult, QueryExecution, Query
 from asksql.service import QueryService
 from asksql.sql import pretty_sql
 from asksql.sqlite import DEFAULT_LIMIT, DEFAULT_TIMEOUT, MAX_LIMIT, inspect, schema
+from asksql.studio import run_studio
 from asksql.tui import pick_connection, run_tui
 
 console = Console()
 error_console = Console(stderr=True)
-COMMANDS = {"ask", "run", "tui", "schema", "models", "connections"}
+COMMANDS = {"ask", "run", "tui", "ui", "schema", "models", "connections"}
 VALUE_OPTIONS = {"--model", "--format", "--output", "--limit", "--timeout"}
 
 
@@ -54,6 +55,11 @@ def build_parser() -> argparse.ArgumentParser:
     tui = subparsers.add_parser("tui", help="open the terminal UI")
     tui.add_argument("database", nargs="?", default="demo")
     tui.set_defaults(func=command_tui)
+
+    ui = subparsers.add_parser("ui", help="open AskSQL Studio in your browser")
+    ui.add_argument("--port", type=studio_port, default=7331, help="localhost port (default: 7331)")
+    ui.add_argument("--no-open", action="store_true", help="do not open a browser automatically")
+    ui.set_defaults(func=command_ui)
 
     schema_command = subparsers.add_parser("schema", help="show database schema")
     schema_command.add_argument("database", nargs="?", default="demo")
@@ -233,6 +239,10 @@ def command_tui(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_ui(args: argparse.Namespace) -> int:
+    return run_studio(model=args.model, port=args.port, open_browser=not args.no_open)
+
+
 def command_ask(args: argparse.Namespace) -> int:
     question = " ".join(args.question).strip()
     if not args.database or not question:
@@ -350,6 +360,16 @@ def query_timeout(value: str) -> float:
     if not math.isfinite(timeout) or timeout <= 0:
         raise argparse.ArgumentTypeError("timeout must be a finite number greater than 0")
     return timeout
+
+
+def studio_port(value: str) -> int:
+    try:
+        port = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("port must be an integer") from exc
+    if not 1 <= port <= 65535:
+        raise argparse.ArgumentTypeError("port must be between 1 and 65535")
+    return port
 
 
 def print_table(result: QueryResult) -> None:

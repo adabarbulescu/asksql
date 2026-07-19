@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/adabarbulescu/asksql/actions/workflows/tests.yml/badge.svg)](https://github.com/adabarbulescu/asksql/actions/workflows/tests.yml)
 
-Ask your database questions from the terminal.
+Ask your database questions from a local AI workspace, the terminal, or the TUI.
 
 Local models by default. API models when you want them. SQL shown before it runs.
 
@@ -29,6 +29,16 @@ pip install -e ".[dev]"
 ```
 
 ## Use
+
+Launch AskSQL Studio, the local-first browser workspace:
+
+```bash
+asksql ui
+```
+
+Studio opens on `127.0.0.1` and uses your saved connections. Its first vertical slice includes a connection picker,
+schema explorer, natural-language SQL generation, editable SQL review, read-only execution, and a results grid. The
+database stays on your machine; model providers receive schema and the question, never result rows.
 
 Save a real SQLite database once, then use its name everywhere:
 
@@ -173,7 +183,7 @@ asksql demo "which customers spent the most?"
 
 ## Anti-scope
 
-- No hosted service.
+- No hosted service; Studio is served only on localhost.
 - No dashboard builder.
 - No migration tool.
 - No agentic multi-step database automation.

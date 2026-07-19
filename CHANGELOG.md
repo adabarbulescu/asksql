@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Add AskSQL Studio, a local-first Vue workspace launched with `asksql ui`.
+- Add saved-connection selection, schema exploration, AI SQL generation, SQL review, and read-only result browsing.
+- Add a localhost-only FastAPI adapter over the existing query service.
+
 All notable changes to this project are documented in this file.
 
 ## Unreleased

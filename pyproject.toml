@@ -22,12 +22,19 @@ classifiers = [
     "Topic :: Database",
     "Topic :: Software Development :: User Interfaces",
 ]
-dependencies = ["rich>=13.7", "sqlglot>=30.0,<31", "textual>=8.2"]
+dependencies = [
+    "fastapi>=0.115,<1",
+    "rich>=13.7",
+    "sqlglot>=30.0,<31",
+    "textual>=8.2",
+    "uvicorn>=0.34,<1",
+]
 
 [project.optional-dependencies]
 dev = [
     "build>=1.2",
     "coverage>=7.6",
+    "httpx>=0.28",
     "mypy>=1.11",
     "ruff>=0.6",
     "setuptools>=69",
@@ -46,7 +53,7 @@ asksql = "asksql.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-asksql = ["py.typed"]
+asksql = ["py.typed", "studio/static/**"]
 
 [tool.ruff]
 line-length = 120

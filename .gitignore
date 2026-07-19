@@ -2,6 +2,10 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .ruff_cache/
+.mypy_cache/
 .venv/
+.test-venv/
+web/node_modules/
+web/*.tsbuildinfo
 dist/
 *.egg-info/
