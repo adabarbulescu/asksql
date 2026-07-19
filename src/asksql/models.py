@@ -36,6 +36,16 @@ class QueryResult:
 
 
 @dataclass(frozen=True)
+class MutationResult:
+    affected_rows: int
+    last_insert_id: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.affected_rows < 0:
+            raise ValueError("affected rows cannot be negative")
+
+
+@dataclass(frozen=True)
 class GeneratedQuery:
     question: str
     sql: str
@@ -53,7 +63,7 @@ class ExecutionStatus(str, Enum):
 @dataclass(frozen=True)
 class QueryExecution:
     sql: str
-    result: QueryResult | None
+    result: QueryResult | MutationResult | None
     duration_ms: float
     status: ExecutionStatus
     error: str | None

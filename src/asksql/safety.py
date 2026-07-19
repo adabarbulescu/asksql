@@ -16,6 +16,14 @@ READ_ONLY_PRAGMAS = {
     "table_list",
     "table_xinfo",
 }
+WRITE_NODES = (
+    exp.Alter,
+    exp.Create,
+    exp.Delete,
+    exp.Drop,
+    exp.Insert,
+    exp.Update,
+)
 DANGEROUS_NODES = (
     exp.Alter,
     exp.Create,
@@ -45,6 +53,20 @@ def is_read_only(sql: str) -> bool:
         return False
     statement = statements[0]
     return bool(statement and _is_read_only_expression(cast(exp.Expression, statement)))
+
+
+def is_write(sql: str) -> bool:
+    """Return whether SQL is one supported, explicitly mutating SQLite statement."""
+    sql = sql.strip().rstrip(";").strip()
+    if not sql:
+        return False
+    try:
+        statements = sqlglot.parse(sql, read="sqlite")
+    except ParseError:
+        return False
+    if len(statements) != 1 or statements[0] is None:
+        return False
+    return isinstance(cast(exp.Expression, statements[0]), WRITE_NODES)
 
 
 def _is_read_only_expression(statement: exp.Expression) -> bool:

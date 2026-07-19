@@ -54,6 +54,14 @@ Run read-only SQL directly:
 asksql --yes run demo "select name from customers order by id"
 ```
 
+Write to an existing SQLite database with explicit opt-in:
+
+```bash
+asksql run --write sqlite://app.db "update users set active = 0 where last_seen < '2025-01-01'"
+```
+
+Write mode accepts one `INSERT`, `UPDATE`, `DELETE`, or DDL statement, shows it before execution, and asks before committing. Add `--yes` before `run` only for deliberate non-interactive use.
+
 Export query results:
 
 ```bash
@@ -122,7 +130,7 @@ asksql demo "which customers spent the most?"
 - Shows when results are limited to 200 rows.
 - Returns at most 200 rows by default. Use `--limit` to choose 1-10000 returned rows.
 - Stops SQLite execution after 30 seconds by default. Use `--timeout` to change that deadline.
-- Runs only read-only statements.
+- Runs read-only statements by default; manual `run --write` execution requires explicit opt-in.
 - Uses Ollama first: `ollama:qwen2.5-coder:7b`.
 - Uses `OPENAI_BASE_URL` when set, otherwise `https://api.openai.com/v1`.
 - Does not send data rows to the model, only schema.
@@ -131,7 +139,7 @@ asksql demo "which customers spent the most?"
 
 - Generated SQL is displayed before execution.
 - Generated SQL requires confirmation unless `--yes` is set.
-- Only read-only SQL is allowed.
+- AI-generated SQL remains read-only; manual writes require `run --write`.
 - Queries are limited to 200 rows by default.
 - SQLite execution times out after 30 seconds by default.
 - `Ctrl+C` cancels a running TUI query.

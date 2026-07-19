@@ -6,7 +6,16 @@ from pathlib import Path
 
 from asksql.demo import create_demo_db
 from asksql.models import CancellationToken, QueryCancelledError, QueryTimeoutError
-from asksql.sqlite import DEFAULT_LIMIT, inspect, limited_query, preview_table, query_result, quote_identifier, schema
+from asksql.sqlite import (
+    DEFAULT_LIMIT,
+    execute_write,
+    inspect,
+    limited_query,
+    preview_table,
+    query_result,
+    quote_identifier,
+    schema,
+)
 
 
 class SqliteTest(unittest.TestCase):
@@ -116,6 +125,43 @@ class SqliteTest(unittest.TestCase):
         result = query_result(create_demo_db(), "select 1")
 
         self.assertEqual(result.rows, [(1,)])
+
+    def test_execute_write_commits_to_existing_database(self) -> None:
+        with tempfile.NamedTemporaryFile(prefix="asksql-write-", suffix=".db", delete=False) as file:
+            path = Path(file.name)
+        with sqlite3.connect(path) as conn:
+            conn.execute("create table items(id integer primary key, name text not null)")
+
+        result = execute_write(f"sqlite://{path}", "insert into items(name) values ('safe')")
+
+        self.assertEqual(result.affected_rows, 1)
+        self.assertEqual(result.last_insert_id, 1)
+        with sqlite3.connect(path) as conn:
+            self.assertEqual(conn.execute("select name from items").fetchall(), [("safe",)])
+
+    def test_execute_write_does_not_create_misspelled_database(self) -> None:
+        path = Path(tempfile.gettempdir()) / "asksql-definitely-missing-write.db"
+        if path.exists():
+            path.unlink()
+
+        with self.assertRaises(sqlite3.OperationalError):
+            execute_write(f"sqlite://{path}", "create table items(id integer)")
+
+        self.assertFalse(path.exists())
+
+    def test_execute_write_enforces_foreign_keys(self) -> None:
+        with tempfile.NamedTemporaryFile(prefix="asksql-write-", suffix=".db", delete=False) as file:
+            path = Path(file.name)
+        with sqlite3.connect(path) as conn:
+            conn.executescript(
+                """
+                create table parent(id integer primary key);
+                create table child(parent_id integer references parent(id));
+                """
+            )
+
+        with self.assertRaises(sqlite3.IntegrityError):
+            execute_write(f"sqlite://{path}", "insert into child(parent_id) values (999)")
 
     def test_quote_identifier(self) -> None:
         self.assertEqual(quote_identifier('weird"name'), '"weird""name"')

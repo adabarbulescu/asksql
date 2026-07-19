@@ -1,6 +1,6 @@
 import unittest
 
-from asksql.safety import is_read_only
+from asksql.safety import is_read_only, is_write
 
 
 class SafetyTest(unittest.TestCase):
@@ -31,6 +31,15 @@ class SafetyTest(unittest.TestCase):
         self.assertFalse(is_read_only("update users set id = 1"))
         self.assertFalse(is_read_only("drop table users"))
         self.assertFalse(is_read_only("create table users(id integer)"))
+
+    def test_recognizes_supported_single_write_statement(self) -> None:
+        self.assertTrue(is_write("insert into users(id) values (1)"))
+        self.assertTrue(is_write("update users set id = 1"))
+        self.assertTrue(is_write("delete from users"))
+        self.assertTrue(is_write("create table users(id integer)"))
+        self.assertFalse(is_write("select * from users"))
+        self.assertFalse(is_write("delete from users; drop table users"))
+        self.assertFalse(is_write("pragma journal_mode = WAL"))
 
 
 if __name__ == "__main__":
