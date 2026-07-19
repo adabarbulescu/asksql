@@ -15,6 +15,7 @@ classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: Console",
     "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -35,9 +36,9 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/asksql/asksql"
-Issues = "https://github.com/asksql/asksql/issues"
-Source = "https://github.com/asksql/asksql"
+Homepage = "https://github.com/adabarbulescu/asksql"
+Issues = "https://github.com/adabarbulescu/asksql/issues"
+Source = "https://github.com/adabarbulescu/asksql"
 
 [project.scripts]
 asksql = "asksql.cli:main"
