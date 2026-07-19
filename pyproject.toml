@@ -35,9 +35,9 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/asksql/asksql"
-Issues = "https://github.com/asksql/asksql/issues"
-Source = "https://github.com/asksql/asksql"
+Homepage = "https://github.com/adabarbulescu/asksql"
+Issues = "https://github.com/adabarbulescu/asksql/issues"
+Source = "https://github.com/adabarbulescu/asksql"
 
 [project.scripts]
 asksql = "asksql.cli:main"

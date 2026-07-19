@@ -1,6 +1,6 @@
 # asksql
 
-[![CI](https://github.com/asksql/asksql/actions/workflows/tests.yml/badge.svg)](https://github.com/asksql/asksql/actions/workflows/tests.yml)
+[![CI](https://github.com/adabarbulescu/asksql/actions/workflows/tests.yml/badge.svg)](https://github.com/adabarbulescu/asksql/actions/workflows/tests.yml)
 
 Ask your database questions from the terminal.
 
@@ -27,14 +27,6 @@ python3 -m venv .venv
 . .venv/bin/activate
 pip install -e ".[dev]"
 ```
-
-## Visual Tour
-
-Record these before the 0.2.0 release:
-
-- `docs/question-sql-review-result.gif`: question -> SQL -> review -> result.
-- `docs/cancel-timeout.gif`: long query -> cancel or timeout.
-- `docs/schema-explorer.gif`: schema tree -> table preview.
 
 ## Use
 
