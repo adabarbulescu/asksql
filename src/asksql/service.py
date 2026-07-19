@@ -36,7 +36,9 @@ class QueryService:
         read_only = is_read_only(sql)
         write = is_write(sql)
         if not read_only and not (allow_write and write):
-            message = "Write SQL requires the explicit --write option." if write else "Refusing unsupported or unsafe SQL."
+            message = (
+                "Write SQL requires the explicit --write option." if write else "Refusing unsupported or unsafe SQL."
+            )
             return self._execution(sql, started, ExecutionStatus.REFUSED, message)
         try:
             result = (
