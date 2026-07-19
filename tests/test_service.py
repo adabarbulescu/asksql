@@ -1,7 +1,10 @@
+import sqlite3
+import tempfile
 import unittest
+from pathlib import Path
 
 from asksql.demo import create_demo_db
-from asksql.models import CancellationToken, ExecutionStatus, QueryExecution, QueryResult
+from asksql.models import CancellationToken, ExecutionStatus, MutationResult, QueryExecution, QueryResult
 from asksql.service import QueryService
 
 
@@ -18,6 +21,20 @@ class QueryServiceTest(unittest.TestCase):
 
         self.assertEqual(execution.status, ExecutionStatus.REFUSED)
         self.assertIsNone(execution.result)
+
+    def test_execute_commits_write_only_with_explicit_opt_in(self) -> None:
+        with tempfile.NamedTemporaryFile(prefix="asksql-service-", suffix=".db", delete=False) as file:
+            path = Path(file.name)
+        with sqlite3.connect(path) as conn:
+            conn.execute("create table items(id integer primary key, name text)")
+        service = QueryService(f"sqlite://{path}")
+
+        execution = service.execute("insert into items(name) values ('committed')", allow_write=True)
+
+        self.assertEqual(execution.status, ExecutionStatus.SUCCEEDED)
+        self.assertIsInstance(execution.result, MutationResult)
+        with sqlite3.connect(path) as conn:
+            self.assertEqual(conn.execute("select name from items").fetchall(), [("committed",)])
 
     def test_execute_reports_timeout(self) -> None:
         sql = """
