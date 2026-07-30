@@ -23,10 +23,11 @@ classifiers = [
     "Topic :: Software Development :: User Interfaces",
 ]
 dependencies = [
-    "fastapi>=0.115,<1",
+    "fastapi>=0.115,<0.116",
     "keyring>=25,<26",
     "rich>=13.7",
     "sqlglot>=30.0,<31",
+    "starlette>=0.46,<0.47",
     "textual>=8.2",
     "uvicorn>=0.34,<1",
 ]

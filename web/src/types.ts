@@ -15,6 +15,18 @@ export interface ModelStatus {
   detail: string;
 }
 
+export interface SetupStatus {
+  ready: boolean;
+  configDir: string;
+  connections: number;
+  connectionError: string;
+  model: string;
+  modelChecked: boolean;
+  modelReady: boolean;
+  modelDetail: string;
+  nextSteps: string[];
+}
+
 export interface HistoryEntry {
   id: string;
   connection: string;

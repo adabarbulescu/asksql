@@ -1,3 +1,4 @@
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -39,6 +40,26 @@ class WorkspaceStoreTest(unittest.TestCase):
         self.store.delete(second.id)
         self.assertEqual(self.store.clear("one"), 1)
         self.assertEqual(self.store.entries(), [])
+
+    def test_backs_up_existing_unversioned_workspace_before_adopting_it(self) -> None:
+        path = Path(self.directory.name) / "old-workspace.db"
+        with sqlite3.connect(path) as connection:
+            connection.execute("create table legacy(id text primary key)")
+
+        WorkspaceStore(path)
+
+        self.assertTrue(path.with_name("old-workspace.db.pre-migration.bak").is_file())
+
+    def test_backs_up_unsupported_workspace_before_refusing_it(self) -> None:
+        path = Path(self.directory.name) / "future-workspace.db"
+        with sqlite3.connect(path) as connection:
+            connection.execute("create table workspace_meta(version integer not null)")
+            connection.execute("insert into workspace_meta(version) values (999)")
+
+        with self.assertRaisesRegex(RuntimeError, "Backup created"):
+            WorkspaceStore(path)
+
+        self.assertTrue(path.with_name("future-workspace.db.unsupported-v999.bak").is_file())
 
 
 if __name__ == "__main__":

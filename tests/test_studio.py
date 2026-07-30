@@ -4,12 +4,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from fastapi.testclient import TestClient
-
 from asksql.cli import main
 from asksql.connections import ConnectionStore
 from asksql.studio import create_app
 from asksql.workspace import WorkspaceStore
+from tests.api_client import DirectClient
 
 
 class StudioApiTest(unittest.TestCase):
@@ -30,9 +29,8 @@ class StudioApiTest(unittest.TestCase):
         self.store = ConnectionStore(root / "connections.json")
         self.store.add("local", f"sqlite://{database}")
         self.workspace = WorkspaceStore(root / "workspace.db")
-        self.client = TestClient(
-            create_app(store=self.store, workspace=self.workspace, static_dir=root / "missing-static")
-        )
+        self.app = create_app(store=self.store, workspace=self.workspace, static_dir=root / "missing-static")
+        self.client = DirectClient(self.app)
 
     def test_lists_connections_and_structured_schema(self) -> None:
         connections = self.client.get("/api/connections")
@@ -99,6 +97,23 @@ class StudioApiTest(unittest.TestCase):
 
         self.assertEqual(response.json(), {"model": "ollama:qwen", "ready": True, "detail": "ready"})
         check.assert_called_once_with("ollama:qwen")
+
+    def test_reports_first_run_setup_status(self) -> None:
+        route = next(route for route in self.app.routes if getattr(route, "path", "") == "/api/setup")
+        payload = route.endpoint(model="ollama:test")
+
+        self.assertTrue(payload["ready"])
+        self.assertEqual(payload["connections"], 1)
+        self.assertEqual(payload["model"], "ollama:test")
+        self.assertFalse(payload["modelChecked"])
+
+    def test_reports_redacted_support_diagnostics(self) -> None:
+        route = next(route for route in self.app.routes if getattr(route, "path", "") == "/api/diagnostics")
+        payload = route.endpoint(model="ollama:test")
+
+        self.assertEqual(payload["connections"][0]["name"], "local")
+        self.assertEqual(payload["connections"][0]["target"], "studio.db")
+        self.assertNotIn(str(Path(self.directory.name)), str(payload))
 
     def test_stores_openai_key_without_returning_it(self) -> None:
         with patch("asksql.studio.server.set_secret") as save_secret:
@@ -172,7 +187,7 @@ class StudioApiTest(unittest.TestCase):
         studio.assert_called_once_with(model="ollama:test", port=7444, open_browser=False)
 
     def test_packaged_studio_shell_is_served(self) -> None:
-        client = TestClient(create_app(store=self.store, workspace=self.workspace))
+        client = DirectClient(create_app(store=self.store, workspace=self.workspace))
 
         response = client.get("/")
 

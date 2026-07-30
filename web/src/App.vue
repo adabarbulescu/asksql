@@ -61,7 +61,7 @@ async function useDemo() {
     <header class="topbar">
       <div class="brand"><span class="brand-mark">A</span><strong>AskSQL</strong><span>Studio</span></div>
       <div class="topbar-center">
-        <span class="pulse" /> Local workspace
+        <span :class="['pulse', { ready: studio.setupStatus?.ready }]" /> {{ studio.setupStatus?.ready ? "Ready" : "Setup needed" }}
       </div>
       <button class="model-pill" @click="modelDialog = true">
         <span :class="['model-state', { ready: studio.modelStatus?.ready }]" />
@@ -129,6 +129,11 @@ async function useDemo() {
             <button class="secondary-button large" :disabled="studio.activity === 'demo'" @click="useDemo">
               <span v-if="studio.activity === 'demo'" class="spinner" /><span v-else>◇</span> Explore the demo
             </button>
+            <button class="secondary-button large" @click="modelDialog = true"><span>✦</span> Configure model</button>
+          </div>
+          <div v-if="studio.setupStatus?.nextSteps.length" class="setup-steps">
+            <strong>Next steps</strong>
+            <span v-for="step in studio.setupStatus.nextSteps" :key="step">{{ step }}</span>
           </div>
           <div class="trust-row"><span>✓ Existing files only</span><span>✓ Read-only by default</span><span>✓ No database uploads</span></div>
           <div v-if="studio.error" class="error-banner"><span>!</span>{{ studio.error }}</div>

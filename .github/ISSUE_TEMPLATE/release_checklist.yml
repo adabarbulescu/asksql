@@ -1,0 +1,17 @@
+name: Release checklist
+description: Track release readiness before publishing
+title: "[Release]: "
+labels: ["release"]
+body:
+  - type: checkboxes
+    id: gates
+    attributes:
+      label: Gates
+      options:
+        - label: First-run setup checked with `asksql setup` and Studio demo flow
+        - label: Wheel and Studio package smoke tests passed from a clean install
+        - label: User-facing errors reviewed for common connection/model failures
+        - label: Offline SQL quality harness passed
+        - label: Workspace backup/migration tests passed
+        - label: README install, model, privacy, and troubleshooting docs match behavior
+        - label: `asksql diagnostics` output reviewed for secret/result-row redaction

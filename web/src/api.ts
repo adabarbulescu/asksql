@@ -6,6 +6,7 @@ import type {
   ModelStatus,
   QueryExecution,
   SchemaDetails,
+  SetupStatus,
   WriteReview,
 } from "./types";
 
@@ -16,9 +17,24 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   });
   const payload = response.status === 204 ? null : await response.json();
   if (!response.ok) {
-    throw new Error(payload.detail ?? `Request failed (${response.status})`);
+    throw new Error(requestErrorMessage(payload, response.status));
   }
   return payload as T;
+}
+
+export function requestErrorMessage(payload: unknown, status: number): string {
+  const detail = payload && typeof payload === "object" && "detail" in payload ? payload.detail : undefined;
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    return detail
+      .map((item) => {
+        if (!item || typeof item !== "object") return String(item);
+        const location = "loc" in item && Array.isArray(item.loc) ? `${item.loc.join(".")}: ` : "";
+        return `${location}${"msg" in item ? item.msg : "Invalid value"}`;
+      })
+      .join("; ");
+  }
+  return `Request failed (${status})`;
 }
 
 export async function fetchConnections(): Promise<ConnectionProfile[]> {
@@ -60,6 +76,12 @@ export function checkModel(model: string): Promise<ModelStatus> {
     method: "POST",
     body: JSON.stringify({ model }),
   });
+}
+
+export function fetchSetup(model: string, checkModel = false): Promise<SetupStatus> {
+  const params = new URLSearchParams({ model });
+  if (checkModel) params.set("check_model", "true");
+  return request<SetupStatus>(`/api/setup?${params}`);
 }
 
 export function saveOpenAIKey(apiKey: string): Promise<void> {

@@ -12,6 +12,7 @@ import {
   fetchConnections,
   fetchHistory,
   fetchSchema,
+  fetchSetup,
   generateSqlStream,
   deleteHistory,
   pinHistory,
@@ -28,6 +29,7 @@ import type {
   HistoryEntry,
   ModelStatus,
   QueryExecution,
+  SetupStatus,
   TableSchema,
   WriteReview,
 } from "../types";
@@ -61,6 +63,7 @@ export const useStudioStore = defineStore("studio", {
     sql: "select 1 as ready",
     model: initialModel,
     modelStatus: null as ModelStatus | null,
+    setupStatus: null as SetupStatus | null,
     execution: null as QueryExecution | null,
     history: [] as HistoryEntry[],
     historySearch: "",
@@ -93,6 +96,7 @@ export const useStudioStore = defineStore("studio", {
           await this.selectConnection(target ?? this.connections[0].name);
         }
         await this.loadHistory();
+        await this.loadSetup();
         const historyId = new URLSearchParams(window.location.search).get("history");
         const entry = this.history.find((item) => item.id === historyId);
         if (entry) await this.restoreHistory(entry);
@@ -112,6 +116,7 @@ export const useStudioStore = defineStore("studio", {
         this.tables = [];
         this.execution = null;
       }
+      await this.loadSetup();
     },
     async selectConnection(name: string) {
       this.selectedConnection = name;
@@ -306,6 +311,7 @@ export const useStudioStore = defineStore("studio", {
       this.modelStatus = null;
       try {
         this.modelStatus = await checkModel(this.model);
+        this.setupStatus = await fetchSetup(this.model, true);
         return this.modelStatus;
       } catch (error) {
         this.error = message(error);
@@ -318,6 +324,10 @@ export const useStudioStore = defineStore("studio", {
       this.model = model;
       this.modelStatus = null;
       window.localStorage.setItem("asksql-model", model);
+      void this.loadSetup();
+    },
+    async loadSetup(checkModel = false) {
+      this.setupStatus = await fetchSetup(this.model, checkModel);
     },
     previewTable(table: TableSchema) {
       this.sql = `select *\nfrom "${table.name.replaceAll('"', '""')}"\nlimit 50`;

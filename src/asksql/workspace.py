@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import sqlite3
 import uuid
 from dataclasses import asdict, dataclass
@@ -37,8 +38,9 @@ class HistoryEntry:
 class WorkspaceStore:
     def __init__(self, path: Path | None = None) -> None:
         self.path = path or config_directory() / "workspace.db"
+        existed = self.path.exists()
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._migrate()
+        self._migrate(existed)
 
     def create_generated(self, connection: str, question: str, sql: str, model: str) -> HistoryEntry:
         return self.create(connection, sql, source="ai", question=question, model=model, status="generated")
@@ -191,7 +193,7 @@ class WorkspaceStore:
         connection.execute("pragma foreign_keys = on")
         return connection
 
-    def _migrate(self) -> None:
+    def _migrate(self, existed: bool) -> None:
         with self._connect() as connection:
             connection.executescript(
                 """
@@ -231,10 +233,23 @@ class WorkspaceStore:
             )
             row = connection.execute("select version from workspace_meta limit 1").fetchone()
             if row is None:
+                if existed:
+                    self._backup("pre-migration")
                 connection.execute("insert into workspace_meta(version) values (?)", (WORKSPACE_VERSION,))
             elif row[0] != WORKSPACE_VERSION:
-                raise RuntimeError(f"unsupported workspace database version: {row[0]}")
+                backup = self._backup(f"unsupported-v{row[0]}")
+                raise RuntimeError(f"unsupported workspace database version: {row[0]}. Backup created at {backup}")
         os.chmod(self.path, 0o600)
+
+    def _backup(self, reason: str) -> Path:
+        target = self.path.with_name(f"{self.path.name}.{reason}.bak")
+        index = 1
+        while target.exists():
+            target = self.path.with_name(f"{self.path.name}.{reason}.{index}.bak")
+            index += 1
+        shutil.copy2(self.path, target)
+        os.chmod(target, 0o600)
+        return target
 
 
 def _history_entry(row: sqlite3.Row) -> HistoryEntry:

@@ -14,10 +14,12 @@ from rich.table import Table
 from asksql.adapters import adapter_for
 from asksql.connections import ConnectionStore, ConnectionStoreError
 from asksql.demo import create_demo_db
+from asksql.diagnostics import diagnostics
 from asksql.export import format_result
 from asksql.llm import ollama_models
 from asksql.models import ExecutionStatus, MutationResult, QueryExecution, QueryResult
 from asksql.service import QueryService
+from asksql.setup import DEFAULT_MODEL, setup_status
 from asksql.sql import pretty_sql
 from asksql.sqlite import DEFAULT_LIMIT, DEFAULT_TIMEOUT, MAX_LIMIT
 from asksql.studio import run_studio
@@ -25,7 +27,7 @@ from asksql.tui import pick_connection, run_tui
 
 console = Console()
 error_console = Console(stderr=True)
-COMMANDS = {"ask", "run", "tui", "ui", "schema", "models", "connections"}
+COMMANDS = {"ask", "run", "tui", "ui", "schema", "models", "connections", "setup", "diagnostics"}
 VALUE_OPTIONS = {"--model", "--format", "--output", "--limit", "--timeout"}
 
 
@@ -66,6 +68,13 @@ def build_parser() -> argparse.ArgumentParser:
     schema_command.add_argument("database", nargs="?", default="demo")
     schema_command.set_defaults(func=command_schema)
 
+    setup = subparsers.add_parser("setup", help="show first-run setup status")
+    setup.add_argument("--check-model", action="store_true", help="also verify the selected model provider")
+    setup.set_defaults(func=command_setup)
+
+    diagnostics_command = subparsers.add_parser("diagnostics", help="print a redacted support report")
+    diagnostics_command.set_defaults(func=command_diagnostics)
+
     models = subparsers.add_parser("models", help="list Ollama models")
     models.set_defaults(func=command_models)
 
@@ -103,7 +112,7 @@ def build_legacy_parser() -> argparse.ArgumentParser:
 
 def base_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Ask your database questions from the terminal.")
-    parser.add_argument("--model", default="ollama:qwen2.5-coder:7b", help="ollama:name or openai:name")
+    parser.add_argument("--model", default=DEFAULT_MODEL, help="ollama:name or openai:name")
     parser.add_argument("--dry-run", action="store_true", help="show SQL without running it")
     parser.add_argument(
         "--format", choices=["table", "csv", "json", "markdown"], default="table", help="result output format"
@@ -224,6 +233,41 @@ def command_connections_remove(args: argparse.Namespace) -> int:
 
 def command_models(args: argparse.Namespace) -> int:
     return show_models()
+
+
+def command_setup(args: argparse.Namespace) -> int:
+    status = setup_status(model=args.model, check_models=args.check_model)
+    table = Table(title="AskSQL setup")
+    table.add_column("item", style="cyan")
+    table.add_column("status")
+    table.add_row("config", status["configDir"])
+    table.add_row("connections", str(status["connections"]))
+    checked = "checked" if status["modelChecked"] else "not checked"
+    table.add_row("model", f"{status['model']} ({checked}) - {status['modelDetail']}")
+    if status["connectionError"]:
+        table.add_row("connection store", str(status["connectionError"]))
+    console.print(table)
+    if status["nextSteps"]:
+        console.print("[yellow]Next steps:[/]")
+        for step in status["nextSteps"]:
+            console.print(f"- {step}")
+    else:
+        console.print("[green]Ready.[/]")
+    return 0 if status["ready"] else 1
+
+
+def command_diagnostics(args: argparse.Namespace) -> int:
+    report = diagnostics(model=args.model)
+    table = Table(title="AskSQL diagnostics")
+    table.add_column("item", style="cyan")
+    table.add_column("value")
+    for key in ["asksqlVersion", "python", "platform", "configDir", "model", "connectionError"]:
+        if report[key]:
+            table.add_row(key, str(report[key]))
+    for connection in report["connections"]:
+        table.add_row("connection", f"{connection['name']}: {connection['kind']} {connection['target']}")
+    console.print(table)
+    return 0
 
 
 def command_schema(args: argparse.Namespace) -> int:

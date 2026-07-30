@@ -92,6 +92,27 @@ class ConnectionStoreTest(unittest.TestCase):
         self.assertEqual(exit_code, 1)
         self.assertIn("No saved connections", stdout.getvalue())
 
+    def test_setup_reports_next_steps_for_empty_profile(self) -> None:
+        stdout = StringIO()
+
+        with redirect_stdout(stdout), redirect_stderr(StringIO()):
+            exit_code = main(["setup"])
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("connections", stdout.getvalue())
+        self.assertIn("Next steps", stdout.getvalue())
+
+    def test_setup_is_ready_with_connection_and_model(self) -> None:
+        ConnectionStore().add("local", self.url)
+        stdout = StringIO()
+
+        with patch("asksql.setup.check_model", return_value=(True, "ready")):
+            with redirect_stdout(stdout), redirect_stderr(StringIO()):
+                exit_code = main(["setup", "--check-model"])
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn("Ready", stdout.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

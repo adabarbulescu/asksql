@@ -4,12 +4,11 @@ import time
 import unittest
 from pathlib import Path
 
-from fastapi.testclient import TestClient
-
 from asksql.connections import ConnectionStore
 from asksql.studio.server import create_app
 from asksql.studio.writes import WriteIntentError, WriteIntentManager
 from asksql.workspace import WorkspaceStore
+from tests.api_client import DirectClient
 
 
 class WriteIntentManagerTest(unittest.TestCase):
@@ -44,7 +43,7 @@ class StudioWriteApiTest(unittest.TestCase):
         store = ConnectionStore(root / "connections.json")
         store.add("local", f"sqlite://{self.database}")
         self.workspace = WorkspaceStore(root / "workspace.db")
-        self.client = TestClient(create_app(store=store, workspace=self.workspace, static_dir=root / "missing"))
+        self.client = DirectClient(create_app(store=store, workspace=self.workspace, static_dir=root / "missing"))
 
     def test_review_then_commit_write(self) -> None:
         sql = "update items set name = 'after' where id = 1"

@@ -8,6 +8,8 @@
     "build": "vue-tsc -b && vite build",
     "typecheck": "vue-tsc -b",
     "test": "vitest run",
+    "audit": "npm audit --audit-level=high",
+    "test:e2e:install": "playwright install --with-deps chromium",
     "test:e2e": "playwright test"
   },
   "dependencies": {
@@ -19,13 +21,13 @@
     "vue": "^3.5.13"
   },
   "devDependencies": {
-    "@vitejs/plugin-vue": "^5.2.3",
     "@playwright/test": "^1.55.0",
-    "@vue/test-utils": "^2.4.6",
-    "happy-dom": "^17.6.3",
+    "@vitejs/plugin-vue": "^5.2.3",
+    "@vue/test-utils": "^2.2.7",
+    "happy-dom": "^20.11.1",
     "typescript": "~5.7.2",
     "vite": "^6.2.0",
-    "vue-tsc": "^2.2.8",
-    "vitest": "^3.2.4"
+    "vitest": "^3.2.4",
+    "vue-tsc": "^3.3.8"
   }
 }

@@ -18,18 +18,18 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from asksql.adapters import adapter_for
 from asksql.connections import ConnectionStore, ConnectionStoreError, normalize_database_url
 from asksql.demo import create_demo_db
+from asksql.diagnostics import diagnostics
 from asksql.export import format_result
 from asksql.llm import check_model
 from asksql.models import ConnectionProfile, ExecutionStatus, MutationResult, QueryExecution, QueryResult, TableSchema
 from asksql.safety import is_read_only, is_write
 from asksql.secrets import set_secret
 from asksql.service import QueryService
+from asksql.setup import DEFAULT_MODEL, setup_status
 from asksql.sqlite import DEFAULT_LIMIT, DEFAULT_TIMEOUT, MAX_LIMIT, inspect
 from asksql.studio.jobs import ExecutionManager
 from asksql.studio.writes import WriteIntentError, WriteIntentManager
 from asksql.workspace import WorkspaceStore
-
-DEFAULT_MODEL = "ollama:qwen2.5-coder:7b"
 
 
 class GenerateRequest(BaseModel):
@@ -112,6 +112,19 @@ def create_app(
     @app.get("/api/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/api/setup")
+    def setup(
+        model: Annotated[str, Query(min_length=1, max_length=200)] = DEFAULT_MODEL,
+        check_model: bool = False,
+    ) -> dict[str, Any]:
+        return setup_status(store=connection_store, model=model, check_models=check_model)
+
+    @app.get("/api/diagnostics")
+    def support_diagnostics(
+        model: Annotated[str, Query(min_length=1, max_length=200)] = DEFAULT_MODEL,
+    ) -> dict[str, Any]:
+        return diagnostics(store=connection_store, model=model)
 
     @app.get("/api/connections")
     def connections() -> dict[str, list[dict[str, str]]]:

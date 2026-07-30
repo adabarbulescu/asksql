@@ -26,6 +26,30 @@ For local development:
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -e ".[dev]"
+cd web && npm ci
+```
+
+Check first-run setup:
+
+```bash
+asksql setup
+asksql setup --check-model
+```
+
+`asksql setup` is fast and does not contact model providers unless `--check-model` is passed.
+
+Run local checks:
+
+```bash
+python -m unittest discover -q
+cd web && npm test && npm run build && npm run audit
+```
+
+For browser e2e tests, install the Playwright browser dependencies once:
+
+```bash
+cd web && npm run test:e2e:install
+npm run test:e2e
 ```
 
 ## Use
@@ -70,6 +94,8 @@ asksql connections remove local
 Connection profiles are stored in `$XDG_CONFIG_HOME/asksql/connections.json` (or
 `~/.config/asksql/connections.json`) with private file permissions. Query metadata is kept in a private local
 `workspace.db`; result rows are not persisted. Set `ASKSQL_CONFIG_DIR` to override the directory.
+Workspace upgrades keep a private backup before adopting an older unversioned database or refusing a future
+unsupported workspace version.
 
 PostgreSQL support uses the optional driver:
 
@@ -89,6 +115,12 @@ List local Ollama models:
 
 ```bash
 asksql models
+```
+
+Check the selected model:
+
+```bash
+asksql setup --check-model
 ```
 
 Inspect a database schema:
@@ -160,6 +192,9 @@ Use an OpenAI-compatible API:
 OPENAI_API_KEY=... asksql --model openai:gpt-4.1-mini ask sqlite://app.db "weekly signups"
 ```
 
+For local models, start Ollama and install the model named by `--model`. For API models, set `OPENAI_API_KEY`
+or save the key in Studio's model dialog. `OPENAI_BASE_URL` can point at any OpenAI-compatible endpoint.
+
 Preview SQL without running it:
 
 ```bash
@@ -193,6 +228,17 @@ asksql demo "which customers spent the most?"
 - Database execution times out after 30 seconds by default.
 - `Ctrl+C` cancels a running TUI query.
 - Model calls receive schema only, not data rows.
+
+## Troubleshooting
+
+- `asksql setup` shows config paths, saved connection count, selected model, and the next missing setup step.
+- `PostgreSQL support requires...`: install the optional driver with `pipx inject asksql psycopg[binary]` or
+  install AskSQL with `asksql[postgres]`.
+- `Ollama is reachable, but ... is not installed`: run `ollama pull MODEL` or choose an installed model.
+- `OPENAI_API_KEY is not configured`: set the environment variable or save the key in Studio.
+- `SQLite database does not exist`: pass an existing file path; AskSQL does not create application databases.
+- Config, saved connections, workspace history, and backups live under `$ASKSQL_CONFIG_DIR` when set, otherwise
+  `$XDG_CONFIG_HOME/asksql` or `~/.config/asksql`.
 
 ## Anti-scope
 
