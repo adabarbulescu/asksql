@@ -108,7 +108,9 @@ asksql connections remove local
 
 Connection profiles are stored in `$XDG_CONFIG_HOME/asksql/connections.json` (or
 `~/.config/asksql/connections.json`) with private file permissions. Query metadata is kept in a private local
-`workspace.db`; result rows are not persisted. Set `ASKSQL_CONFIG_DIR` to override the directory.
+`workspace.db`. Ordinary SQL result rows are not persisted; completed Analysis runs retain their bounded evidence rows,
+semantic plans, and compiled SQL locally so reports remain auditable after restart. Set `ASKSQL_CONFIG_DIR` to override
+the directory.
 Workspace upgrades keep a private backup before adopting an older unversioned database or refusing a future
 unsupported workspace version.
 
