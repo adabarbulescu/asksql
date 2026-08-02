@@ -70,6 +70,28 @@ export interface WorkspaceSnapshot {
   documents: QueryDocument[];
 }
 
+export interface SavedQuery {
+  id: string;
+  name: string;
+  description: string;
+  connection_hint: string;
+  natural_language_question: string;
+  sql: string;
+  schema_context: string[];
+  tags: string[];
+  folder: string | null;
+  favorite: boolean;
+  created_at: string;
+  updated_at: string;
+  source_document_id: string | null;
+}
+
+export interface SavedQueryLibrary {
+  savedQueries: SavedQuery[];
+  folders: string[];
+  tags: string[];
+}
+
 export interface Column {
   name: string;
   type: string;

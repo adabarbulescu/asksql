@@ -7,6 +7,8 @@ import type {
   QueryExecution,
   QueryDocument,
   WorkspaceSnapshot,
+  SavedQuery,
+  SavedQueryLibrary,
   SchemaDetails,
   SetupStatus,
   WriteReview,
@@ -42,6 +44,37 @@ export function updateQueryDocument(
 
 export function deleteQueryDocument(identifier: string): Promise<void> {
   return request<void>(`/api/workspace/documents/${encodeURIComponent(identifier)}`, { method: "DELETE" });
+}
+
+export function fetchSavedQueries(filters: {
+  search?: string; folder?: string; tag?: string; favorite?: boolean;
+} = {}): Promise<SavedQueryLibrary> {
+  const params = new URLSearchParams();
+  if (filters.search) params.set("search", filters.search);
+  if (filters.folder !== undefined) params.set("folder", filters.folder);
+  if (filters.tag) params.set("tag", filters.tag);
+  if (filters.favorite !== undefined) params.set("favorite", String(filters.favorite));
+  return request<SavedQueryLibrary>(`/api/saved-queries?${params}`);
+}
+
+export function createSavedQuery(payload: Omit<SavedQuery, "id" | "created_at" | "updated_at">): Promise<SavedQuery> {
+  return request<SavedQuery>("/api/saved-queries", { method: "POST", body: JSON.stringify(payload) });
+}
+
+export function updateSavedQuery(identifier: string, payload: Partial<SavedQuery>): Promise<SavedQuery> {
+  return request<SavedQuery>(`/api/saved-queries/${encodeURIComponent(identifier)}`, {
+    method: "PATCH", body: JSON.stringify(payload),
+  });
+}
+
+export function duplicateSavedQuery(identifier: string, name?: string): Promise<SavedQuery> {
+  return request<SavedQuery>(`/api/saved-queries/${encodeURIComponent(identifier)}/duplicate`, {
+    method: "POST", body: JSON.stringify({ name }),
+  });
+}
+
+export function deleteSavedQuery(identifier: string): Promise<void> {
+  return request<void>(`/api/saved-queries/${encodeURIComponent(identifier)}`, { method: "DELETE" });
 }
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {

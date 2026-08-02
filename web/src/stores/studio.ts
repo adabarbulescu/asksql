@@ -26,6 +26,11 @@ import {
   fetchWorkspace,
   setWorkspaceActive,
   updateQueryDocument,
+  createSavedQuery,
+  deleteSavedQuery,
+  duplicateSavedQuery,
+  fetchSavedQueries,
+  updateSavedQuery,
 } from "../api";
 import type {
   ConnectionProfile,
@@ -35,6 +40,7 @@ import type {
   ModelStatus,
   QueryExecution,
   QueryDocument,
+  SavedQuery,
   SetupStatus,
   TableSchema,
   WriteReview,
@@ -46,6 +52,7 @@ type Activity =
   | "generate"
   | "execute"
   | "history"
+  | "library"
   | "save-connection"
   | "demo"
   | "model"
@@ -74,6 +81,13 @@ export const useStudioStore = defineStore("studio", {
     setupStatus: null as SetupStatus | null,
     execution: null as QueryExecution | null,
     history: [] as HistoryEntry[],
+    savedQueries: [] as SavedQuery[],
+    savedQueryFolders: [] as string[],
+    savedQueryTags: [] as string[],
+    librarySearch: "",
+    libraryFolder: undefined as string | undefined,
+    libraryTag: undefined as string | undefined,
+    libraryFavoritesOnly: false,
     historySearch: "",
     activeHistoryId: "",
     generatedHistoryId: "",
@@ -110,6 +124,7 @@ export const useStudioStore = defineStore("studio", {
           if (!this.documents.length) await this.newDocument();
         }
         await this.loadHistory();
+        await this.loadSavedQueries();
         await this.loadSetup();
         const historyId = new URLSearchParams(window.location.search).get("history");
         const entry = this.history.find((item) => item.id === historyId);
@@ -427,6 +442,70 @@ export const useStudioStore = defineStore("studio", {
       await deleteHistory(entry.id);
       if (this.activeHistoryId === entry.id) this.activeHistoryId = "";
       await this.loadHistory();
+    },
+    async loadSavedQueries() {
+      const library = await fetchSavedQueries({
+        search: this.librarySearch.trim() || undefined,
+        folder: this.libraryFolder,
+        tag: this.libraryTag,
+        favorite: this.libraryFavoritesOnly ? true : undefined,
+      });
+      this.savedQueries = library.savedQueries;
+      this.savedQueryFolders = library.folders;
+      this.savedQueryTags = library.tags;
+    },
+    async saveActiveQuery(details: { name: string; description: string; folder?: string; tags: string[] }, saveAs = false) {
+      if (!this.activeDocument) return;
+      this.cancelPendingPersist(this.activeDocument.id);
+      await this.persistDocument();
+      const existing = saveAs
+        ? undefined
+        : this.savedQueries.find((item) => item.source_document_id === this.activeDocument?.id);
+      const payload = {
+        name: details.name,
+        description: details.description,
+        connection_hint: this.activeDocument.connection,
+        natural_language_question: this.activeDocument.question,
+        sql: this.activeDocument.edited_sql,
+        schema_context: [...this.selectedTables],
+        tags: details.tags,
+        folder: details.folder || null,
+        favorite: existing?.favorite ?? false,
+        source_document_id: this.activeDocument.id,
+      };
+      if (existing) await updateSavedQuery(existing.id, payload);
+      else await createSavedQuery(payload);
+      await this.loadSavedQueries();
+    },
+    async openSavedQuery(item: SavedQuery) {
+      const connection = this.connections.some((profile) => profile.name === item.connection_hint)
+        ? item.connection_hint
+        : this.selectedConnection;
+      if (!connection) return;
+      const document = await createQueryDocument(connection, item.name);
+      document.question = item.natural_language_question;
+      document.edited_sql = item.sql;
+      document.generated_sql = item.sql;
+      document.selected_tables = [...item.schema_context];
+      document.lifecycle_state = "draft";
+      this.documents.push(document);
+      this.activeDocumentId = document.id;
+      await this.persistDocument();
+      await updateSavedQuery(item.id, { source_document_id: document.id });
+      await this.activateDocument(document.id);
+      await this.loadSavedQueries();
+    },
+    async duplicateSavedQueryItem(item: SavedQuery) {
+      await duplicateSavedQuery(item.id);
+      await this.loadSavedQueries();
+    },
+    async toggleSavedQueryFavorite(item: SavedQuery) {
+      await updateSavedQuery(item.id, { favorite: !item.favorite });
+      await this.loadSavedQueries();
+    },
+    async removeSavedQueryItem(item: SavedQuery) {
+      await deleteSavedQuery(item.id);
+      await this.loadSavedQueries();
     },
     async newDocument() {
       if (!this.selectedConnection) return;

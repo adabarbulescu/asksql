@@ -6,6 +6,7 @@ import HistoryPanel from "./components/HistoryPanel.vue";
 import ModelDialog from "./components/ModelDialog.vue";
 import ResultsGrid from "./components/ResultsGrid.vue";
 import SchemaTree from "./components/SchemaTree.vue";
+import SavedQueriesPanel from "./components/SavedQueriesPanel.vue";
 import SqlEditor from "./components/SqlEditor.vue";
 import WriteReviewDialog from "./components/WriteReviewDialog.vue";
 import { useStudioStore } from "./stores/studio";
@@ -13,12 +14,13 @@ import type { ConnectionProfile } from "./types";
 
 const studio = useStudioStore();
 const activeTab = ref<"results" | "messages">("results");
-const sidebarTab = ref<"connections" | "history">("connections");
+const sidebarTab = ref<"connections" | "history" | "library">("connections");
 const connectionDialog = ref(false);
 const editingConnection = ref<ConnectionProfile>();
 const modelDialog = ref(false);
 const deletingConnection = ref<ConnectionProfile>();
 const rowCount = computed(() => studio.execution?.result?.rows.length ?? 0);
+const savedForActive = computed(() => studio.savedQueries.find((item) => item.source_document_id === studio.activeDocumentId));
 const question = computed({
   get: () => studio.activeDocument?.question ?? "",
   set: (value: string) => {
@@ -46,6 +48,18 @@ watch(
 async function renameDocument(identifier: string, current: string) {
   const title = window.prompt("Query name", current)?.trim();
   if (title && title !== current) await studio.renameDocument(identifier, title);
+}
+
+async function saveQuery(saveAs = false) {
+  if (!studio.activeDocument) return;
+  const existing = saveAs ? undefined : savedForActive.value;
+  const name = window.prompt("Saved query name", existing?.name ?? studio.activeDocument.title)?.trim();
+  if (!name) return;
+  const description = window.prompt("Description", existing?.description ?? "") ?? "";
+  const folder = window.prompt("Folder (optional)", existing?.folder ?? "")?.trim() || undefined;
+  const tags = (window.prompt("Tags, separated by commas", existing?.tags.join(", ") ?? "") ?? "")
+    .split(",").map((tag) => tag.trim()).filter(Boolean);
+  await studio.saveActiveQuery({ name, description, folder, tags }, saveAs);
 }
 
 function openAddConnection() {
@@ -98,6 +112,7 @@ async function useDemo() {
           <div class="sidebar-tabs">
             <button :class="{ active: sidebarTab === 'connections' }" @click="sidebarTab = 'connections'">Connections</button>
             <button :class="{ active: sidebarTab === 'history' }" @click="sidebarTab = 'history'; studio.loadHistory()">History</button>
+            <button :class="{ active: sidebarTab === 'library' }" @click="sidebarTab = 'library'; studio.loadSavedQueries()">Library</button>
           </div>
           <div class="heading-actions"><span class="count">{{ studio.connections.length }}</span><button title="Add connection" @click="openAddConnection">＋</button></div>
         </div>
@@ -116,7 +131,8 @@ async function useDemo() {
             <span>◉</span><strong>No connections yet</strong><small>Add an existing database or explore the demo.</small>
           </div>
         </div>
-        <HistoryPanel v-else />
+        <HistoryPanel v-else-if="sidebarTab === 'history'" />
+        <SavedQueriesPanel v-else />
         <div class="local-note"><span>⌂</span><div><strong>Local-first</strong><small>Your data stays on this machine.</small></div></div>
       </aside>
 
@@ -205,6 +221,8 @@ async function useDemo() {
         <section class="query-panel">
           <div class="query-heading">
             <div><span :class="['status-dot', studio.activeDocument?.lifecycle_state]" /><strong>SQL review</strong><small>{{ studio.activeDocument?.lifecycle_state }} · Read-only execution</small></div>
+            <button class="save-query-button" :disabled="!sql.trim()" @click="saveQuery(false)">{{ savedForActive ? "Save" : "Save query" }}</button>
+            <button v-if="savedForActive" class="save-query-button" :disabled="!sql.trim()" @click="saveQuery(true)">Save as</button>
             <button v-if="!studio.activeJobId" class="write-button" :disabled="studio.busy || !studio.selectedConnection || !sql.trim()" @click="studio.prepareWrite">Review write</button>
             <button v-if="studio.activeJobId" class="cancel-button" @click="studio.cancelExecution">
               ■ Cancel

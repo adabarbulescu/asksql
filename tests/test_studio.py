@@ -225,6 +225,38 @@ class StudioApiTest(unittest.TestCase):
         self.assertEqual(restored["execution_status"], "succeeded")
         self.assertEqual(restored["result_reference"], started["historyId"])
 
+    def test_saved_query_library_api(self) -> None:
+        document = self.client.post(
+            "/api/workspace/documents", json={"connection": "local", "title": "Projects"}
+        ).json()
+        created = self.client.post(
+            "/api/saved-queries",
+            json={
+                "name": "Project names",
+                "description": "Reusable project lookup",
+                "connection_hint": "local",
+                "natural_language_question": "show project names",
+                "sql": "select name from projects",
+                "schema_context": ["projects"],
+                "tags": ["Lookup", "projects"],
+                "folder": "Operations",
+                "favorite": True,
+                "source_document_id": document["id"],
+            },
+        )
+        identifier = created.json()["id"]
+        found = self.client.get("/api/saved-queries", params={"search": "lookup", "tag": "lookup"}).json()
+        updated = self.client.patch(f"/api/saved-queries/{identifier}", json={"favorite": False}).json()
+        duplicated = self.client.post(f"/api/saved-queries/{identifier}/duplicate", json={}).json()
+        deleted = self.client.delete(f"/api/saved-queries/{identifier}")
+
+        self.assertEqual(created.status_code, 201)
+        self.assertEqual(found["savedQueries"][0]["id"], identifier)
+        self.assertIn("Operations", found["folders"])
+        self.assertFalse(updated["favorite"])
+        self.assertEqual(duplicated["name"], "Project names copy")
+        self.assertEqual(deleted.status_code, 204)
+
     def test_unknown_connection_is_not_found(self) -> None:
         response = self.client.get("/api/connections/missing/schema")
 

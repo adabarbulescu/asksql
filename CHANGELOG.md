@@ -4,6 +4,10 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+- Added a Saved Queries Library with explicit Save/Save as workflows, folders, normalized tags, favorites, full-text
+  search, duplication, and opening reusable queries in new workspace tabs.
+- Migrated private workspace storage from v2 to v3 with a pre-migration backup and a dedicated `saved_queries`
+  aggregate, kept separate from mutable query documents and execution history.
 - Added a persistent multi-query Studio workspace with reopenable, renameable tabs and per-document connection,
   schema context, natural-language question, generated SQL, edited SQL, execution metadata, and result references.
 - Added explicit draft, generated, running, completed, failed, and cancelled document lifecycles, including recovery

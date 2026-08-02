@@ -67,14 +67,42 @@ class DocumentUpdateRequest(BaseModel):
     question: str | None = Field(default=None, max_length=10_000)
     generated_sql: str | None = Field(default=None, max_length=100_000)
     edited_sql: str | None = Field(default=None, max_length=100_000)
-    lifecycle_state: str | None = Field(
-        default=None, pattern="^(draft|generated|running|completed|failed|cancelled)$"
-    )
+    lifecycle_state: str | None = Field(default=None, pattern="^(draft|generated|running|completed|failed|cancelled)$")
 
 
 class WorkspaceUpdateRequest(BaseModel):
     active_connection: str | None = Field(default=None, max_length=100)
     active_document_id: str | None = Field(default=None, max_length=64)
+
+
+class SavedQueryCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=2_000)
+    connection_hint: str = Field(min_length=1, max_length=100)
+    natural_language_question: str = Field(default="", max_length=10_000)
+    sql: str = Field(min_length=1, max_length=100_000)
+    schema_context: list[str] = Field(default_factory=list, max_length=200)
+    tags: list[str] = Field(default_factory=list, max_length=100)
+    folder: str | None = Field(default=None, max_length=200)
+    favorite: bool = False
+    source_document_id: str | None = Field(default=None, max_length=64)
+
+
+class SavedQueryUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=2_000)
+    connection_hint: str | None = Field(default=None, min_length=1, max_length=100)
+    natural_language_question: str | None = Field(default=None, max_length=10_000)
+    sql: str | None = Field(default=None, min_length=1, max_length=100_000)
+    schema_context: list[str] | None = Field(default=None, max_length=200)
+    tags: list[str] | None = Field(default=None, max_length=100)
+    folder: str | None = Field(default=None, max_length=200)
+    favorite: bool | None = None
+    source_document_id: str | None = Field(default=None, max_length=64)
+
+
+class DuplicateSavedQueryRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
 
 
 class ConnectionRequest(BaseModel):
@@ -198,6 +226,65 @@ def create_app(
     def delete_document(identifier: Annotated[str, ApiPath(min_length=1)]) -> Response:
         try:
             workspace_store.delete_document(identifier)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return Response(status_code=204)
+
+    @app.get("/api/saved-queries")
+    def list_saved_queries(
+        search: Annotated[str | None, Query(max_length=500)] = None,
+        folder: Annotated[str | None, Query(max_length=200)] = None,
+        tag: Annotated[str | None, Query(max_length=100)] = None,
+        favorite: bool | None = None,
+        limit: Annotated[int, Query(ge=1, le=500)] = 500,
+    ) -> dict[str, object]:
+        items = workspace_store.saved_queries(search=search, folder=folder, tag=tag, favorite=favorite, limit=limit)
+        return {
+            "savedQueries": [item.payload() for item in items],
+            "folders": sorted({item.folder for item in workspace_store.saved_queries() if item.folder}),
+            "tags": sorted({tag for item in workspace_store.saved_queries() for tag in item.tags}),
+        }
+
+    @app.post("/api/saved-queries", status_code=201)
+    def create_saved_query(request: SavedQueryCreateRequest) -> dict[str, object]:
+        try:
+            return workspace_store.create_saved_query(**request.model_dump()).payload()
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/saved-queries/{identifier}")
+    def get_saved_query(identifier: Annotated[str, ApiPath(min_length=1)]) -> dict[str, object]:
+        try:
+            return workspace_store.get_saved_query(identifier).payload()
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.patch("/api/saved-queries/{identifier}")
+    def update_saved_query(
+        identifier: Annotated[str, ApiPath(min_length=1)], request: SavedQueryUpdateRequest
+    ) -> dict[str, object]:
+        try:
+            return workspace_store.update_saved_query(identifier, **request.model_dump(exclude_unset=True)).payload()
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/saved-queries/{identifier}/duplicate", status_code=201)
+    def duplicate_saved_query(
+        identifier: Annotated[str, ApiPath(min_length=1)], request: DuplicateSavedQueryRequest
+    ) -> dict[str, object]:
+        try:
+            return workspace_store.duplicate_saved_query(identifier, request.name).payload()
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.delete("/api/saved-queries/{identifier}", status_code=204)
+    def delete_saved_query(identifier: Annotated[str, ApiPath(min_length=1)]) -> Response:
+        try:
+            workspace_store.delete_saved_query(identifier)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return Response(status_code=204)

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import sqlite3
 import uuid
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -11,7 +13,7 @@ from pathlib import Path
 from asksql.connections import config_directory
 from asksql.models import ExecutionStatus, MutationResult, QueryExecution, QueryResult
 
-WORKSPACE_VERSION = 2
+WORKSPACE_VERSION = 3
 
 DOCUMENT_STATES = {"draft", "generated", "running", "completed", "failed", "cancelled"}
 
@@ -54,6 +56,26 @@ class QueryDocument:
     result_reference: str | None
     created_at: str
     updated_at: str
+
+    def payload(self) -> dict[str, object]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class SavedQuery:
+    id: str
+    name: str
+    description: str
+    connection_hint: str
+    natural_language_question: str
+    sql: str
+    schema_context: list[str]
+    tags: list[str]
+    folder: str | None
+    favorite: bool
+    created_at: str
+    updated_at: str
+    source_document_id: str | None
 
     def payload(self) -> dict[str, object]:
         return asdict(self)
@@ -285,9 +307,7 @@ class WorkspaceStore:
         assignments.append("updated_at = ?")
         values.extend((_timestamp(), identifier))
         with self._connect() as connection:
-            cursor = connection.execute(
-                f"update query_documents set {', '.join(assignments)} where id = ?", values
-            )
+            cursor = connection.execute(f"update query_documents set {', '.join(assignments)} where id = ?", values)
             if cursor.rowcount != 1:
                 raise KeyError(f"unknown query document: {identifier}")
         return self.get_document(identifier)
@@ -327,6 +347,160 @@ class WorkspaceStore:
                     _timestamp(),
                 ),
             )
+
+    def create_saved_query(
+        self,
+        *,
+        name: str,
+        description: str = "",
+        connection_hint: str,
+        natural_language_question: str = "",
+        sql: str,
+        schema_context: list[str] | None = None,
+        tags: list[str] | None = None,
+        folder: str | None = None,
+        favorite: bool = False,
+        source_document_id: str | None = None,
+    ) -> SavedQuery:
+        identifier = uuid.uuid4().hex
+        timestamp = _timestamp()
+        values = _saved_query_values(
+            name=name,
+            description=description,
+            connection_hint=connection_hint,
+            natural_language_question=natural_language_question,
+            sql=sql,
+            schema_context=schema_context or [],
+            tags=tags or [],
+            folder=folder,
+        )
+        with self._connect() as connection:
+            if (
+                source_document_id is not None
+                and connection.execute("select 1 from query_documents where id = ?", (source_document_id,)).fetchone()
+                is None
+            ):
+                raise KeyError(f"unknown query document: {source_document_id}")
+            connection.execute(
+                """
+                insert into saved_queries(
+                    id, name, description, connection_hint, natural_language_question, sql,
+                    schema_context, tags, folder, favorite, created_at, updated_at, source_document_id
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (identifier, *values, int(favorite), timestamp, timestamp, source_document_id),
+            )
+        return self.get_saved_query(identifier)
+
+    def get_saved_query(self, identifier: str) -> SavedQuery:
+        with self._connect() as connection:
+            row = connection.execute("select * from saved_queries where id = ?", (identifier,)).fetchone()
+        if row is None:
+            raise KeyError(f"unknown saved query: {identifier}")
+        return _saved_query(row)
+
+    def saved_queries(
+        self,
+        *,
+        search: str | None = None,
+        folder: str | None = None,
+        tag: str | None = None,
+        favorite: bool | None = None,
+        limit: int = 500,
+    ) -> list[SavedQuery]:
+        conditions: list[str] = []
+        values: list[object] = []
+        if search:
+            pattern = f"%{_like(search)}%"
+            conditions.append(
+                "(name like ? escape '\\' or description like ? escape '\\' or sql like ? escape '\\' "
+                "or natural_language_question like ? escape '\\' or connection_hint like ? escape '\\')"
+            )
+            values.extend([pattern] * 5)
+        if folder is not None:
+            conditions.append("coalesce(folder, '') = ?")
+            values.append(folder)
+        if tag:
+            conditions.append("exists(select 1 from json_each(saved_queries.tags) where value = ?)")
+            values.append(_tag(tag))
+        if favorite is not None:
+            conditions.append("favorite = ?")
+            values.append(int(favorite))
+        where = f"where {' and '.join(conditions)}" if conditions else ""
+        values.append(limit)
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"select * from saved_queries {where} order by favorite desc, updated_at desc limit ?", values
+            ).fetchall()
+        return [_saved_query(row) for row in rows]
+
+    def update_saved_query(self, identifier: str, **changes: object) -> SavedQuery:
+        allowed = {
+            "name",
+            "description",
+            "connection_hint",
+            "natural_language_question",
+            "sql",
+            "schema_context",
+            "tags",
+            "folder",
+            "favorite",
+            "source_document_id",
+        }
+        current = self.get_saved_query(identifier)
+        invalid = set(changes) - allowed
+        if invalid:
+            raise ValueError(f"unsupported saved query field: {sorted(invalid)[0]}")
+        merged = current.payload()
+        merged.update(changes)
+        values = _saved_query_values(
+            name=str(merged["name"]),
+            description=str(merged["description"]),
+            connection_hint=str(merged["connection_hint"]),
+            natural_language_question=str(merged["natural_language_question"]),
+            sql=str(merged["sql"]),
+            schema_context=_object_list(merged["schema_context"]),
+            tags=_object_list(merged["tags"]),
+            folder=merged["folder"] if isinstance(merged["folder"], str) else None,
+        )
+        source_document_id = merged["source_document_id"]
+        with self._connect() as connection:
+            if (
+                source_document_id is not None
+                and connection.execute("select 1 from query_documents where id = ?", (source_document_id,)).fetchone()
+                is None
+            ):
+                raise KeyError(f"unknown query document: {source_document_id}")
+            connection.execute(
+                """
+                update saved_queries set name = ?, description = ?, connection_hint = ?,
+                    natural_language_question = ?, sql = ?, schema_context = ?, tags = ?, folder = ?,
+                    favorite = ?, source_document_id = ?, updated_at = ? where id = ?
+                """,
+                (*values, int(bool(merged["favorite"])), source_document_id, _timestamp(), identifier),
+            )
+        return self.get_saved_query(identifier)
+
+    def duplicate_saved_query(self, identifier: str, name: str | None = None) -> SavedQuery:
+        item = self.get_saved_query(identifier)
+        return self.create_saved_query(
+            name=name or f"{item.name} copy",
+            description=item.description,
+            connection_hint=item.connection_hint,
+            natural_language_question=item.natural_language_question,
+            sql=item.sql,
+            schema_context=item.schema_context,
+            tags=item.tags,
+            folder=item.folder,
+            favorite=False,
+            source_document_id=item.source_document_id,
+        )
+
+    def delete_saved_query(self, identifier: str) -> None:
+        with self._connect() as connection:
+            cursor = connection.execute("delete from saved_queries where id = ?", (identifier,))
+            if cursor.rowcount != 1:
+                raise KeyError(f"unknown saved query: {identifier}")
 
     def audit_write(
         self,
@@ -432,6 +606,22 @@ class WorkspaceStore:
                     updated_at text not null
                 );
                 create index if not exists query_documents_updated on query_documents(updated_at desc);
+                create table if not exists saved_queries(
+                    id text primary key,
+                    name text not null,
+                    description text not null default '',
+                    connection_hint text not null,
+                    natural_language_question text not null default '',
+                    sql text not null,
+                    schema_context text not null default '[]',
+                    tags text not null default '[]',
+                    folder text,
+                    favorite integer not null default 0 check(favorite in (0, 1)),
+                    created_at text not null,
+                    updated_at text not null,
+                    source_document_id text references query_documents(id) on delete set null
+                );
+                create index if not exists saved_queries_updated on saved_queries(favorite desc, updated_at desc);
                 """
             )
             row = connection.execute("select version from workspace_meta limit 1").fetchone()
@@ -439,15 +629,13 @@ class WorkspaceStore:
                 if existed:
                     self._backup("pre-migration")
                 connection.execute("insert into workspace_meta(version) values (?)", (WORKSPACE_VERSION,))
-            elif row[0] == 1:
-                self._backup("pre-v2")
+            elif row[0] in {1, 2}:
+                self._backup(f"pre-v{WORKSPACE_VERSION}")
                 connection.execute("update workspace_meta set version = ?", (WORKSPACE_VERSION,))
             elif row[0] != WORKSPACE_VERSION:
                 backup = self._backup(f"unsupported-v{row[0]}")
                 raise RuntimeError(f"unsupported workspace database version: {row[0]}. Backup created at {backup}")
-            connection.execute(
-                "insert or ignore into workspace_state(id, updated_at) values (1, ?)", (_timestamp(),)
-            )
+            connection.execute("insert or ignore into workspace_state(id, updated_at) values (1, ?)", (_timestamp(),))
             connection.execute(
                 """
                 update query_documents
@@ -490,8 +678,6 @@ def _history_entry(row: sqlite3.Row) -> HistoryEntry:
 
 
 def _query_document(row: sqlite3.Row) -> QueryDocument:
-    import json
-
     return QueryDocument(
         id=str(row["id"]),
         title=str(row["title"]),
@@ -511,6 +697,24 @@ def _query_document(row: sqlite3.Row) -> QueryDocument:
     )
 
 
+def _saved_query(row: sqlite3.Row) -> SavedQuery:
+    return SavedQuery(
+        id=str(row["id"]),
+        name=str(row["name"]),
+        description=str(row["description"]),
+        connection_hint=str(row["connection_hint"]),
+        natural_language_question=str(row["natural_language_question"]),
+        sql=str(row["sql"]),
+        schema_context=list(json.loads(row["schema_context"])),
+        tags=list(json.loads(row["tags"])),
+        folder=row["folder"],
+        favorite=bool(row["favorite"]),
+        created_at=str(row["created_at"]),
+        updated_at=str(row["updated_at"]),
+        source_document_id=row["source_document_id"],
+    )
+
+
 def _document_title(value: str) -> str:
     title = value.strip()
     if not title:
@@ -518,10 +722,50 @@ def _document_title(value: str) -> str:
     return title[:200]
 
 
-def _tables_json(tables: list[object]) -> str:
-    import json
-
+def _tables_json(tables: Sequence[object]) -> str:
     return json.dumps([str(table) for table in tables], separators=(",", ":"))
+
+
+def _saved_query_values(
+    *,
+    name: str,
+    description: str,
+    connection_hint: str,
+    natural_language_question: str,
+    sql: str,
+    schema_context: Sequence[object],
+    tags: Sequence[object],
+    folder: str | None,
+) -> tuple[str, str, str, str, str, str, str, str | None]:
+    clean_name = name.strip()
+    clean_connection = connection_hint.strip()
+    clean_sql = sql.strip()
+    if not clean_name:
+        raise ValueError("saved query name cannot be empty")
+    if not clean_connection:
+        raise ValueError("saved query connection hint cannot be empty")
+    if not clean_sql:
+        raise ValueError("saved query SQL cannot be empty")
+    clean_folder = folder.strip()[:200] if folder and folder.strip() else None
+    normalized_tags = sorted({_tag(str(tag)) for tag in tags if str(tag).strip()})
+    return (
+        clean_name[:200],
+        description.strip()[:2_000],
+        clean_connection[:100],
+        natural_language_question.strip()[:10_000],
+        clean_sql[:100_000],
+        _tables_json(schema_context),
+        json.dumps(normalized_tags, separators=(",", ":")),
+        clean_folder,
+    )
+
+
+def _tag(value: str) -> str:
+    return value.strip().lower()[:100]
+
+
+def _object_list(value: object) -> list[object]:
+    return list(value) if isinstance(value, (list, tuple)) else []
 
 
 def _timestamp() -> str:

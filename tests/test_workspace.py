@@ -87,6 +87,44 @@ class WorkspaceStoreTest(unittest.TestCase):
         self.assertEqual(completed.result_reference, "history-1")
         self.assertEqual(completed.row_count, 1)
 
+    def test_saved_query_library_crud_search_filters_and_duplicate(self) -> None:
+        document = self.store.create_document("warehouse", title="Revenue")
+        saved = self.store.create_saved_query(
+            name="Monthly revenue",
+            description="Reusable finance query",
+            connection_hint="warehouse",
+            natural_language_question="revenue by month",
+            sql="select month, sum(total) from orders group by month",
+            schema_context=["orders"],
+            tags=["Finance", "monthly", "finance"],
+            folder="Reporting",
+            favorite=True,
+            source_document_id=document.id,
+        )
+
+        self.assertEqual(self.store.saved_queries(search="finance")[0].id, saved.id)
+        self.assertEqual(self.store.saved_queries(tag="FINANCE")[0].tags, ["finance", "monthly"])
+        self.assertEqual(self.store.saved_queries(folder="Reporting", favorite=True)[0].id, saved.id)
+        updated = self.store.update_saved_query(saved.id, sql="select sum(total) from orders", favorite=False)
+        duplicate = self.store.duplicate_saved_query(saved.id)
+
+        self.assertFalse(updated.favorite)
+        self.assertEqual(duplicate.name, "Monthly revenue copy")
+        self.store.delete_saved_query(saved.id)
+        with self.assertRaises(KeyError):
+            self.store.get_saved_query(saved.id)
+
+    def test_migrates_v2_workspace_to_v3_with_backup_and_preserves_documents(self) -> None:
+        document = self.store.create_document("local", title="Existing work")
+        with sqlite3.connect(self.store.path) as connection:
+            connection.execute("update workspace_meta set version = 2")
+
+        migrated = WorkspaceStore(self.store.path)
+
+        self.assertEqual(migrated.get_document(document.id).title, "Existing work")
+        self.assertEqual(migrated.saved_queries(), [])
+        self.assertTrue(self.store.path.with_name("workspace.db.pre-v3.bak").is_file())
+
     def test_backs_up_existing_unversioned_workspace_before_adopting_it(self) -> None:
         path = Path(self.directory.name) / "old-workspace.db"
         with sqlite3.connect(path) as connection:

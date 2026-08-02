@@ -63,7 +63,9 @@ asksql ui
 Studio opens on `127.0.0.1` and uses your saved connections. Its persistent multi-query workspace restores open
 tabs after restart and preserves each query's connection, schema context, question, generated and edited SQL,
 execution lifecycle, metadata, and result reference. Studio also includes searchable query history, natural-language
-SQL generation, cancellable execution, safe write confirmation, exports, query plans, and a virtualized results grid. The
+SQL generation, cancellable execution, safe write confirmation, exports, query plans, and a virtualized results grid.
+The Saved Queries Library captures deliberate reusable snapshots independently from session drafts and execution
+history, with folders, tags, favorites, search, duplication, Save as, and opening into a fresh tab. The
 database stays on your machine; model providers receive schema and the question, never result rows.
 
 No terminal setup is required after launch. Studio can register, validate, rename, and remove SQLite or PostgreSQL
