@@ -257,6 +257,59 @@ class StudioApiTest(unittest.TestCase):
         self.assertEqual(duplicated["name"], "Project names copy")
         self.assertEqual(deleted.status_code, 204)
 
+    def test_parameterized_saved_query_validates_binds_exports_and_hides_sensitive_values(self) -> None:
+        document = self.client.post(
+            "/api/workspace/documents", json={"connection": "local", "title": "Parameterized"}
+        ).json()
+        saved = self.client.post(
+            "/api/saved-queries",
+            json={
+                "name": "Project by name",
+                "connection_hint": "local",
+                "sql": "select name from projects where name = :name and :secret = :secret",
+                "source_document_id": document["id"],
+                "parameters": [
+                    {"name": "name", "data_type": "text", "required": True, "description": "Project name"},
+                    {"name": "secret", "data_type": "text", "required": True, "sensitive": True},
+                ],
+            },
+        ).json()
+        executed = self.client.post(
+            "/api/query/execute",
+            json={
+                "connection": "local",
+                "sql": saved["sql"],
+                "saved_query_id": saved["id"],
+                "parameter_values": {"name": "AskSQL Studio", "secret": "runtime-only"},
+            },
+        )
+        exported = self.client.post(
+            "/api/query/export",
+            json={
+                "connection": "local",
+                "sql": saved["sql"],
+                "format": "json",
+                "saved_query_id": saved["id"],
+                "parameter_values": {"name": "AskSQL Studio", "secret": "runtime-only"},
+            },
+        )
+        missing = self.client.post(
+            "/api/query/execute",
+            json={"connection": "local", "sql": saved["sql"], "saved_query_id": saved["id"]},
+        )
+        persisted = self.client.patch(
+            f"/api/workspace/documents/{document['id']}",
+            json={
+                "saved_query_id": saved["id"],
+                "parameter_values": {"name": "AskSQL Studio", "secret": "must-not-persist"},
+            },
+        ).json()
+
+        self.assertEqual(executed.json()["result"]["rows"], [["AskSQL Studio"]])
+        self.assertIn("AskSQL Studio", exported.text)
+        self.assertEqual(missing.status_code, 422)
+        self.assertEqual(persisted["parameter_values"], {"name": "AskSQL Studio"})
+
     def test_unknown_connection_is_not_found(self) -> None:
         response = self.client.get("/api/connections/missing/schema")
 

@@ -4,7 +4,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from threading import Lock
-from typing import Callable
+from typing import Callable, Mapping
 
 from asksql.models import CancellationToken, QueryExecution
 from asksql.service import QueryService
@@ -35,6 +35,7 @@ class ExecutionManager:
         timeout: float,
         allow_write: bool = False,
         completed: Callable[[QueryExecution], None] | None = None,
+        parameters: Mapping[str, object] | None = None,
     ) -> ExecutionJob:
         job = ExecutionJob(uuid.uuid4().hex, history_id, "queued", CancellationToken())
         with self._lock:
@@ -49,6 +50,7 @@ class ExecutionManager:
                 timeout=timeout,
                 cancellation=job.token,
                 allow_write=allow_write,
+                parameters=parameters,
             )
             try:
                 if completed:

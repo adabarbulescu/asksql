@@ -38,6 +38,12 @@ class PostgreSQLIntegrationTest(unittest.TestCase):
 
         self.assertEqual(execution.status, ExecutionStatus.TIMED_OUT)
 
+    def test_native_named_parameter_binding(self) -> None:
+        execution = QueryService(self.url).execute("select :value::integer as value", parameters={"value": 42})
+
+        self.assertEqual(execution.status, ExecutionStatus.SUCCEEDED)
+        self.assertEqual(execution.result.rows, [(42,)])  # type: ignore[union-attr]
+
 
 if __name__ == "__main__":
     unittest.main()

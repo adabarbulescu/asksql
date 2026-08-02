@@ -22,6 +22,7 @@ from asksql.diagnostics import diagnostics
 from asksql.export import format_result
 from asksql.llm import check_model
 from asksql.models import ConnectionProfile, ExecutionStatus, MutationResult, QueryExecution, QueryResult, TableSchema
+from asksql.parameters import ParameterDefinition, detect_parameters, validate_and_bind
 from asksql.safety import is_read_only, is_write
 from asksql.secrets import set_secret
 from asksql.service import QueryService
@@ -50,6 +51,8 @@ class ExecuteRequest(BaseModel):
     model: str | None = Field(default=None, max_length=200)
     source: str = Field(default="manual", pattern="^(manual|ai)$")
     document_id: str | None = Field(default=None, max_length=64)
+    saved_query_id: str | None = Field(default=None, max_length=64)
+    parameter_values: dict[str, object] = Field(default_factory=dict)
 
 
 class DocumentCreateRequest(BaseModel):
@@ -58,6 +61,8 @@ class DocumentCreateRequest(BaseModel):
     question: str = Field(default="", max_length=10_000)
     edited_sql: str = Field(default="select 1 as ready", max_length=100_000)
     selected_tables: list[str] = Field(default_factory=list, max_length=200)
+    saved_query_id: str | None = Field(default=None, max_length=64)
+    parameter_values: dict[str, object] = Field(default_factory=dict)
 
 
 class DocumentUpdateRequest(BaseModel):
@@ -68,6 +73,17 @@ class DocumentUpdateRequest(BaseModel):
     generated_sql: str | None = Field(default=None, max_length=100_000)
     edited_sql: str | None = Field(default=None, max_length=100_000)
     lifecycle_state: str | None = Field(default=None, pattern="^(draft|generated|running|completed|failed|cancelled)$")
+    saved_query_id: str | None = Field(default=None, max_length=64)
+    parameter_values: dict[str, object] | None = None
+
+
+class SavedQueryParameterRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=100, pattern="^[A-Za-z_][A-Za-z0-9_]*$")
+    data_type: str = Field(pattern="^(text|integer|decimal|boolean|date|datetime)$")
+    required: bool = True
+    default_value: object | None = None
+    description: str = Field(default="", max_length=500)
+    sensitive: bool = False
 
 
 class WorkspaceUpdateRequest(BaseModel):
@@ -86,6 +102,7 @@ class SavedQueryCreateRequest(BaseModel):
     folder: str | None = Field(default=None, max_length=200)
     favorite: bool = False
     source_document_id: str | None = Field(default=None, max_length=64)
+    parameters: list[SavedQueryParameterRequest] = Field(default_factory=list, max_length=100)
 
 
 class SavedQueryUpdateRequest(BaseModel):
@@ -99,6 +116,7 @@ class SavedQueryUpdateRequest(BaseModel):
     folder: str | None = Field(default=None, max_length=200)
     favorite: bool | None = None
     source_document_id: str | None = Field(default=None, max_length=64)
+    parameters: list[SavedQueryParameterRequest] | None = Field(default=None, max_length=100)
 
 
 class DuplicateSavedQueryRequest(BaseModel):
@@ -128,6 +146,8 @@ class ExportRequest(BaseModel):
     format: str = Field(pattern="^(csv|json|markdown)$")
     limit: int = Field(default=MAX_LIMIT, ge=1, le=MAX_LIMIT)
     timeout: float = Field(default=DEFAULT_TIMEOUT, gt=0, le=3600)
+    saved_query_id: str | None = Field(default=None, max_length=64)
+    parameter_values: dict[str, object] = Field(default_factory=dict)
 
 
 class WriteReviewRequest(BaseModel):
@@ -161,7 +181,7 @@ def create_app(
     execution_manager = jobs or ExecutionManager()
     write_intents = writes or WriteIntentManager()
     assets = static_dir or Path(__file__).with_name("static")
-    app = FastAPI(title="AskSQL Studio", version="0.3.0", docs_url=None, redoc_url=None)
+    app = FastAPI(title="AskSQL Studio", version="0.6.0", docs_url=None, redoc_url=None)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "testserver"])
 
     @app.get("/api/health")
@@ -204,6 +224,8 @@ def create_app(
                 question=request.question,
                 edited_sql=request.edited_sql,
                 selected_tables=request.selected_tables,
+                saved_query_id=request.saved_query_id,
+                parameter_values=request.parameter_values,
             ).payload()
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -248,7 +270,10 @@ def create_app(
     @app.post("/api/saved-queries", status_code=201)
     def create_saved_query(request: SavedQueryCreateRequest) -> dict[str, object]:
         try:
-            return workspace_store.create_saved_query(**request.model_dump()).payload()
+            payload = request.model_dump()
+            payload["parameters"] = [parameter.model_dump() for parameter in request.parameters]
+            _validate_saved_query_contract(str(payload["sql"]), payload["parameters"])
+            return workspace_store.create_saved_query(**payload).payload()
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
@@ -266,7 +291,14 @@ def create_app(
         identifier: Annotated[str, ApiPath(min_length=1)], request: SavedQueryUpdateRequest
     ) -> dict[str, object]:
         try:
-            return workspace_store.update_saved_query(identifier, **request.model_dump(exclude_unset=True)).payload()
+            changes = request.model_dump(exclude_unset=True)
+            if request.parameters is not None:
+                changes["parameters"] = [parameter.model_dump() for parameter in request.parameters]
+            current = workspace_store.get_saved_query(identifier)
+            _validate_saved_query_contract(
+                str(changes.get("sql", current.sql)), changes.get("parameters", current.parameters)
+            )
+            return workspace_store.update_saved_query(identifier, **changes).payload()
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
@@ -487,6 +519,12 @@ def create_app(
     @app.post("/api/query/execute")
     def execute(request: ExecuteRequest) -> dict[str, Any]:
         profile = _profile(connection_store, request.connection)
+        try:
+            parameters = _bound_parameters(
+                workspace_store, request.saved_query_id, request.sql, request.parameter_values
+            )
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=404 if isinstance(exc, KeyError) else 422, detail=str(exc)) from exc
         history_id = request.history_id
         if history_id is None:
             history_id = workspace_store.create(
@@ -501,6 +539,7 @@ def create_app(
             limit=request.limit,
             timeout=request.timeout,
             allow_write=False,
+            parameters=parameters,
         )
         payload = _execution_payload(execution, history_id)
         try:
@@ -512,6 +551,12 @@ def create_app(
     @app.post("/api/query/jobs", status_code=202)
     def start_execution(request: ExecuteRequest) -> dict[str, str]:
         profile = _profile(connection_store, request.connection)
+        try:
+            parameters = _bound_parameters(
+                workspace_store, request.saved_query_id, request.sql, request.parameter_values
+            )
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=404 if isinstance(exc, KeyError) else 422, detail=str(exc)) from exc
         history_id = request.history_id
         if history_id is None:
             history_id = workspace_store.create(
@@ -531,6 +576,8 @@ def create_app(
                     lifecycle_state="running",
                     execution_status=None,
                     error=None,
+                    saved_query_id=request.saved_query_id,
+                    parameter_values=request.parameter_values,
                 )
             except KeyError as exc:
                 raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -547,6 +594,7 @@ def create_app(
             limit=request.limit,
             timeout=request.timeout,
             completed=record_completion,
+            parameters=parameters,
         )
         return {"jobId": job.id, "historyId": history_id, "state": job.state}
 
@@ -572,7 +620,15 @@ def create_app(
     @app.post("/api/query/export")
     def export_query(request: ExportRequest) -> Response:
         profile = _profile(connection_store, request.connection)
-        execution = QueryService(profile.url).execute(request.sql, limit=request.limit, timeout=request.timeout)
+        try:
+            parameters = _bound_parameters(
+                workspace_store, request.saved_query_id, request.sql, request.parameter_values
+            )
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=404 if isinstance(exc, KeyError) else 422, detail=str(exc)) from exc
+        execution = QueryService(profile.url).execute(
+            request.sql, limit=request.limit, timeout=request.timeout, parameters=parameters
+        )
         if execution.status != ExecutionStatus.SUCCEEDED or not isinstance(execution.result, QueryResult):
             raise HTTPException(status_code=400, detail=execution.error or "Query could not be exported")
         content = format_result(execution.result, request.format)
@@ -686,6 +742,37 @@ def _profile(store: ConnectionStore, name: str) -> ConnectionProfile:
         return store.get(name)
     except ConnectionStoreError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+def _validate_saved_query_contract(sql: str, parameters: object) -> None:
+    if not isinstance(parameters, list) or not all(isinstance(parameter, dict) for parameter in parameters):
+        raise ValueError("invalid saved query parameters")
+    definitions = [ParameterDefinition.from_payload(parameter) for parameter in parameters]
+    placeholders = detect_parameters(sql)
+    names = [definition.name for definition in definitions]
+    duplicates = sorted({name for name in names if names.count(name) > 1})
+    if duplicates:
+        raise ValueError(f"duplicate parameter definitions: {', '.join(duplicates)}")
+    missing = [name for name in placeholders if name not in names]
+    unused = [name for name in names if name not in placeholders]
+    if missing:
+        raise ValueError(f"missing parameter definitions: {', '.join(missing)}")
+    if unused:
+        raise ValueError(f"parameters not present in SQL: {', '.join(unused)}")
+
+
+def _bound_parameters(
+    workspace: WorkspaceStore, saved_query_id: str | None, sql: str, values: dict[str, object]
+) -> dict[str, object]:
+    if not detect_parameters(sql):
+        if values:
+            raise ValueError("parameter values supplied for SQL without parameters")
+        return {}
+    if not saved_query_id:
+        raise ValueError("parameterized SQL requires a saved query contract")
+    saved = workspace.get_saved_query(saved_query_id)
+    definitions = [ParameterDefinition.from_payload(parameter) for parameter in saved.parameters]
+    return validate_and_bind(sql, definitions, values)
 
 
 def _validate_database(value: str) -> tuple[str, int]:

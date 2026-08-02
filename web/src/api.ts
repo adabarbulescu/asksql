@@ -25,16 +25,18 @@ export function setWorkspaceActive(activeConnection: string, activeDocumentId: s
   });
 }
 
-export function createQueryDocument(connection: string, title = "Untitled query"): Promise<QueryDocument> {
+export function createQueryDocument(
+  connection: string, title = "Untitled query", savedQueryId?: string, parameterValues: Record<string, unknown> = {},
+): Promise<QueryDocument> {
   return request<QueryDocument>("/api/workspace/documents", {
     method: "POST",
-    body: JSON.stringify({ connection, title }),
+    body: JSON.stringify({ connection, title, saved_query_id: savedQueryId, parameter_values: parameterValues }),
   });
 }
 
 export function updateQueryDocument(
   identifier: string,
-  changes: Partial<Pick<QueryDocument, "title" | "connection" | "selected_tables" | "question" | "generated_sql" | "edited_sql" | "lifecycle_state">>,
+  changes: Partial<Pick<QueryDocument, "title" | "connection" | "selected_tables" | "question" | "generated_sql" | "edited_sql" | "lifecycle_state" | "saved_query_id" | "parameter_values">>,
 ): Promise<QueryDocument> {
   return request<QueryDocument>(`/api/workspace/documents/${encodeURIComponent(identifier)}`, {
     method: "PATCH",
@@ -234,7 +236,7 @@ export async function generateSqlStream(
 export function startExecution(
   connection: string,
   sql: string,
-  metadata: { historyId?: string; question?: string; model?: string; source?: "ai" | "manual"; documentId?: string } = {},
+  metadata: { historyId?: string; question?: string; model?: string; source?: "ai" | "manual"; documentId?: string; savedQueryId?: string; parameterValues?: Record<string, unknown> } = {},
 ): Promise<ExecutionJob> {
   return request<ExecutionJob>("/api/query/jobs", {
     method: "POST",
@@ -246,6 +248,8 @@ export function startExecution(
       model: metadata.model,
       source: metadata.source ?? "manual",
       document_id: metadata.documentId,
+      saved_query_id: metadata.savedQueryId,
+      parameter_values: metadata.parameterValues,
     }),
   });
 }
@@ -262,11 +266,13 @@ export async function exportQuery(
   connection: string,
   sql: string,
   format: "csv" | "json" | "markdown",
+  savedQueryId?: string,
+  parameterValues: Record<string, unknown> = {},
 ): Promise<void> {
   const response = await fetch("/api/query/export", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ connection, sql, format }),
+    body: JSON.stringify({ connection, sql, format, saved_query_id: savedQueryId, parameter_values: parameterValues }),
   });
   if (!response.ok) {
     const payload = (await response.json()) as { detail?: string };

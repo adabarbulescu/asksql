@@ -62,6 +62,8 @@ export interface QueryDocument {
   result_reference: string | null;
   created_at: string;
   updated_at: string;
+  saved_query_id: string | null;
+  parameter_values: Record<string, unknown>;
 }
 
 export interface WorkspaceSnapshot {
@@ -84,6 +86,18 @@ export interface SavedQuery {
   created_at: string;
   updated_at: string;
   source_document_id: string | null;
+  parameters: SavedQueryParameter[];
+}
+
+export type SavedQueryParameterType = "text" | "integer" | "decimal" | "boolean" | "date" | "datetime";
+
+export interface SavedQueryParameter {
+  name: string;
+  data_type: SavedQueryParameterType;
+  required: boolean;
+  default_value: unknown;
+  description: string;
+  sensitive: boolean;
 }
 
 export interface SavedQueryLibrary {

@@ -12,8 +12,9 @@ from pathlib import Path
 
 from asksql.connections import config_directory
 from asksql.models import ExecutionStatus, MutationResult, QueryExecution, QueryResult
+from asksql.parameters import ParameterDefinition
 
-WORKSPACE_VERSION = 3
+WORKSPACE_VERSION = 4
 
 DOCUMENT_STATES = {"draft", "generated", "running", "completed", "failed", "cancelled"}
 
@@ -54,6 +55,8 @@ class QueryDocument:
     row_count: int | None
     error: str | None
     result_reference: str | None
+    saved_query_id: str | None
+    parameter_values: dict[str, object]
     created_at: str
     updated_at: str
 
@@ -76,6 +79,7 @@ class SavedQuery:
     created_at: str
     updated_at: str
     source_document_id: str | None
+    parameters: list[dict[str, object]]
 
     def payload(self) -> dict[str, object]:
         return asdict(self)
@@ -236,6 +240,8 @@ class WorkspaceStore:
         question: str = "",
         edited_sql: str = "select 1 as ready",
         selected_tables: list[str] | None = None,
+        saved_query_id: str | None = None,
+        parameter_values: dict[str, object] | None = None,
     ) -> QueryDocument:
         identifier = uuid.uuid4().hex
         timestamp = _timestamp()
@@ -245,8 +251,8 @@ class WorkspaceStore:
                 """
                 insert into query_documents(
                     id, title, connection_name, selected_tables, question, generated_sql, edited_sql,
-                    lifecycle_state, position, created_at, updated_at
-                ) values (?, ?, ?, ?, ?, '', ?, 'draft', ?, ?, ?)
+                    lifecycle_state, position, created_at, updated_at, saved_query_id, parameter_values
+                ) values (?, ?, ?, ?, ?, '', ?, 'draft', ?, ?, ?, ?, ?)
                 """,
                 (
                     identifier,
@@ -258,6 +264,8 @@ class WorkspaceStore:
                     position,
                     timestamp,
                     timestamp,
+                    saved_query_id,
+                    _parameter_values_json(parameter_values or {}, self._sensitive_names(saved_query_id)),
                 ),
             )
             connection.execute(
@@ -287,6 +295,8 @@ class WorkspaceStore:
             "row_count": "row_count",
             "error": "error",
             "result_reference": "result_reference",
+            "saved_query_id": "saved_query_id",
+            "parameter_values": "parameter_values",
         }
         assignments: list[str] = []
         values: list[object] = []
@@ -298,6 +308,12 @@ class WorkspaceStore:
                 value = _document_title(str(value))
             elif name == "selected_tables":
                 value = _tables_json(value if isinstance(value, list) else [])
+            elif name == "parameter_values":
+                document = self.get_document(identifier)
+                saved_query_id = str(changes.get("saved_query_id") or document.saved_query_id or "") or None
+                value = _parameter_values_json(
+                    value if isinstance(value, dict) else {}, self._sensitive_names(saved_query_id)
+                )
             elif name == "lifecycle_state" and value not in DOCUMENT_STATES:
                 raise ValueError(f"invalid query document state: {value}")
             assignments.append(f"{column} = ?")
@@ -361,6 +377,7 @@ class WorkspaceStore:
         folder: str | None = None,
         favorite: bool = False,
         source_document_id: str | None = None,
+        parameters: list[dict[str, object]] | None = None,
     ) -> SavedQuery:
         identifier = uuid.uuid4().hex
         timestamp = _timestamp()
@@ -385,10 +402,18 @@ class WorkspaceStore:
                 """
                 insert into saved_queries(
                     id, name, description, connection_hint, natural_language_question, sql,
-                    schema_context, tags, folder, favorite, created_at, updated_at, source_document_id
-                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    schema_context, tags, folder, favorite, created_at, updated_at, source_document_id, parameters
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (identifier, *values, int(favorite), timestamp, timestamp, source_document_id),
+                (
+                    identifier,
+                    *values,
+                    int(favorite),
+                    timestamp,
+                    timestamp,
+                    source_document_id,
+                    _parameters_json(parameters or []),
+                ),
             )
         return self.get_saved_query(identifier)
 
@@ -446,6 +471,7 @@ class WorkspaceStore:
             "folder",
             "favorite",
             "source_document_id",
+            "parameters",
         }
         current = self.get_saved_query(identifier)
         invalid = set(changes) - allowed
@@ -475,9 +501,16 @@ class WorkspaceStore:
                 """
                 update saved_queries set name = ?, description = ?, connection_hint = ?,
                     natural_language_question = ?, sql = ?, schema_context = ?, tags = ?, folder = ?,
-                    favorite = ?, source_document_id = ?, updated_at = ? where id = ?
+                    favorite = ?, source_document_id = ?, parameters = ?, updated_at = ? where id = ?
                 """,
-                (*values, int(bool(merged["favorite"])), source_document_id, _timestamp(), identifier),
+                (
+                    *values,
+                    int(bool(merged["favorite"])),
+                    source_document_id,
+                    _parameters_json(_object_dict_list(merged["parameters"])),
+                    _timestamp(),
+                    identifier,
+                ),
             )
         return self.get_saved_query(identifier)
 
@@ -494,6 +527,7 @@ class WorkspaceStore:
             folder=item.folder,
             favorite=False,
             source_document_id=item.source_document_id,
+            parameters=item.parameters,
         )
 
     def delete_saved_query(self, identifier: str) -> None:
@@ -501,6 +535,18 @@ class WorkspaceStore:
             cursor = connection.execute("delete from saved_queries where id = ?", (identifier,))
             if cursor.rowcount != 1:
                 raise KeyError(f"unknown saved query: {identifier}")
+
+    def _sensitive_names(self, saved_query_id: str | None) -> set[str]:
+        if not saved_query_id:
+            return set()
+        try:
+            return {
+                str(parameter["name"])
+                for parameter in self.get_saved_query(saved_query_id).parameters
+                if parameter.get("sensitive")
+            }
+        except KeyError:
+            return set()
 
     def audit_write(
         self,
@@ -586,6 +632,8 @@ class WorkspaceStore:
                     active_connection text,
                     active_document_id text,
                     updated_at text not null
+                    ,saved_query_id text references saved_queries(id) on delete set null
+                    ,parameter_values text not null default '{}'
                 );
                 create table if not exists query_documents(
                     id text primary key,
@@ -620,16 +668,20 @@ class WorkspaceStore:
                     created_at text not null,
                     updated_at text not null,
                     source_document_id text references query_documents(id) on delete set null
+                    ,parameters text not null default '[]'
                 );
                 create index if not exists saved_queries_updated on saved_queries(favorite desc, updated_at desc);
                 """
             )
+            _ensure_column(connection, "query_documents", "saved_query_id", "text")
+            _ensure_column(connection, "query_documents", "parameter_values", "text not null default '{}'")
+            _ensure_column(connection, "saved_queries", "parameters", "text not null default '[]'")
             row = connection.execute("select version from workspace_meta limit 1").fetchone()
             if row is None:
                 if existed:
                     self._backup("pre-migration")
                 connection.execute("insert into workspace_meta(version) values (?)", (WORKSPACE_VERSION,))
-            elif row[0] in {1, 2}:
+            elif row[0] in {1, 2, 3}:
                 self._backup(f"pre-v{WORKSPACE_VERSION}")
                 connection.execute("update workspace_meta set version = ?", (WORKSPACE_VERSION,))
             elif row[0] != WORKSPACE_VERSION:
@@ -692,6 +744,8 @@ def _query_document(row: sqlite3.Row) -> QueryDocument:
         row_count=row["row_count"],
         error=row["error"],
         result_reference=row["result_reference"],
+        saved_query_id=row["saved_query_id"],
+        parameter_values=dict(json.loads(row["parameter_values"])),
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
     )
@@ -712,6 +766,7 @@ def _saved_query(row: sqlite3.Row) -> SavedQuery:
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
         source_document_id=row["source_document_id"],
+        parameters=list(json.loads(row["parameters"])),
     )
 
 
@@ -766,6 +821,33 @@ def _tag(value: str) -> str:
 
 def _object_list(value: object) -> list[object]:
     return list(value) if isinstance(value, (list, tuple)) else []
+
+
+def _object_dict_list(value: object) -> list[dict[str, object]]:
+    if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
+        return []
+    return [dict(item) for item in value]
+
+
+def _parameters_json(parameters: list[dict[str, object]]) -> str:
+    definitions = [ParameterDefinition.from_payload(parameter) for parameter in parameters]
+    if len({definition.name for definition in definitions}) != len(definitions):
+        raise ValueError("saved query parameter names must be unique")
+    return json.dumps([definition.payload() for definition in definitions], separators=(",", ":"), default=str)
+
+
+def _parameter_values_json(values: dict[str, object], sensitive_names: set[str]) -> str:
+    return json.dumps(
+        {name: value for name, value in values.items() if name not in sensitive_names},
+        separators=(",", ":"),
+        default=str,
+    )
+
+
+def _ensure_column(connection: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+    columns = {str(row[1]) for row in connection.execute(f"pragma table_info({table})")}
+    if column not in columns:
+        connection.execute(f"alter table {table} add column {column} {definition}")
 
 
 def _timestamp() -> str:

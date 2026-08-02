@@ -4,6 +4,7 @@ import { computed, onMounted, ref, watch } from "vue";
 import ConnectionDialog from "./components/ConnectionDialog.vue";
 import HistoryPanel from "./components/HistoryPanel.vue";
 import ModelDialog from "./components/ModelDialog.vue";
+import ParameterForm from "./components/ParameterForm.vue";
 import ResultsGrid from "./components/ResultsGrid.vue";
 import SchemaTree from "./components/SchemaTree.vue";
 import SavedQueriesPanel from "./components/SavedQueriesPanel.vue";
@@ -11,6 +12,7 @@ import SqlEditor from "./components/SqlEditor.vue";
 import WriteReviewDialog from "./components/WriteReviewDialog.vue";
 import { useStudioStore } from "./stores/studio";
 import type { ConnectionProfile } from "./types";
+import type { SavedQueryParameter, SavedQueryParameterType } from "./types";
 
 const studio = useStudioStore();
 const activeTab = ref<"results" | "messages">("results");
@@ -59,7 +61,22 @@ async function saveQuery(saveAs = false) {
   const folder = window.prompt("Folder (optional)", existing?.folder ?? "")?.trim() || undefined;
   const tags = (window.prompt("Tags, separated by commas", existing?.tags.join(", ") ?? "") ?? "")
     .split(",").map((tag) => tag.trim()).filter(Boolean);
-  await studio.saveActiveQuery({ name, description, folder, tags }, saveAs);
+  const names = [...sql.value.matchAll(/(?<!:):([A-Za-z_][A-Za-z0-9_]*)/g)].map((match) => match[1])
+    .filter((value, index, values) => values.indexOf(value) === index);
+  const parameters: SavedQueryParameter[] = [];
+  for (const parameterName of names) {
+    const prior = existing?.parameters.find((parameter) => parameter.name === parameterName);
+    const dataType = (window.prompt(
+      `Type for :${parameterName} (text, integer, decimal, boolean, date, datetime)`, prior?.data_type ?? "text",
+    )?.trim() || "text") as SavedQueryParameterType;
+    const defaultValue = window.prompt(`Default value for :${parameterName} (optional)`, String(prior?.default_value ?? ""));
+    const required = window.confirm(`Is :${parameterName} required?`);
+    const sensitive = window.confirm(`Is :${parameterName} sensitive? Sensitive values are never persisted.`);
+    const parameterDescription = window.prompt(`Label or description for :${parameterName}`, prior?.description ?? parameterName) ?? parameterName;
+    parameters.push({ name: parameterName, data_type: dataType, required,
+      default_value: defaultValue || null, description: parameterDescription, sensitive });
+  }
+  await studio.saveActiveQuery({ name, description, folder, tags, parameters }, saveAs);
 }
 
 function openAddConnection() {
@@ -175,6 +192,7 @@ async function useDemo() {
           </div>
           <div class="trust-row"><span>✓ Existing files only</span><span>✓ Read-only by default</span><span>✓ No database uploads</span></div>
           <div v-if="studio.error" class="error-banner"><span>!</span>{{ studio.error }}</div>
+          <ParameterForm />
         </div>
       </section>
 

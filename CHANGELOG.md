@@ -2,7 +2,13 @@
 
 All notable changes to this project are documented in this file.
 
-## Unreleased
+## [0.6.0] - 2026-08-02
+
+- Added typed parameters for saved queries, with native SQLite/PostgreSQL binding, server and client validation,
+  per-tab values, generated Studio forms, and parameter-aware exports.
+- Added text, integer, decimal, boolean, date, and datetime contracts; sensitive values are accepted for execution
+  but excluded from persistent workspace state.
+- Migrated workspace storage from v3 to v4 while preserving parameter definitions through duplication and Save as.
 
 - Added a Saved Queries Library with explicit Save/Save as workflows, folders, normalized tags, favorites, full-text
   search, duplication, and opening reusable queries in new workspace tabs.
@@ -50,4 +56,5 @@ builds do not require those credentials.
 - CLI failures use stable exit codes for refusal, timeout, cancellation, and general errors.
 
 [0.3.0]: https://github.com/adabarbulescu/asksql/releases/tag/v0.3.0
+[0.6.0]: https://github.com/adabarbulescu/asksql/releases/tag/v0.6.0
 [0.2.0]: https://github.com/adabarbulescu/asksql/releases/tag/v0.2.0

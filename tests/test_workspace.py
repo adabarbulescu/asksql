@@ -100,6 +100,24 @@ class WorkspaceStoreTest(unittest.TestCase):
             folder="Reporting",
             favorite=True,
             source_document_id=document.id,
+            parameters=[
+                {
+                    "name": "month",
+                    "data_type": "date",
+                    "required": True,
+                    "default_value": "2026-08-01",
+                    "description": "Month",
+                    "sensitive": False,
+                },
+                {
+                    "name": "token",
+                    "data_type": "text",
+                    "required": False,
+                    "default_value": None,
+                    "description": "Token",
+                    "sensitive": True,
+                },
+            ],
         )
 
         self.assertEqual(self.store.saved_queries(search="finance")[0].id, saved.id)
@@ -110,20 +128,54 @@ class WorkspaceStoreTest(unittest.TestCase):
 
         self.assertFalse(updated.favorite)
         self.assertEqual(duplicate.name, "Monthly revenue copy")
+        self.assertEqual(duplicate.parameters, updated.parameters)
         self.store.delete_saved_query(saved.id)
         with self.assertRaises(KeyError):
             self.store.get_saved_query(saved.id)
 
-    def test_migrates_v2_workspace_to_v3_with_backup_and_preserves_documents(self) -> None:
+    def test_document_persists_parameter_values_but_omits_sensitive_values(self) -> None:
+        document = self.store.create_document("local")
+        saved = self.store.create_saved_query(
+            name="Parameterized",
+            connection_hint="local",
+            sql="select :public, :secret",
+            source_document_id=document.id,
+            parameters=[
+                {
+                    "name": "public",
+                    "data_type": "text",
+                    "required": True,
+                    "default_value": None,
+                    "description": "",
+                    "sensitive": False,
+                },
+                {
+                    "name": "secret",
+                    "data_type": "text",
+                    "required": True,
+                    "default_value": None,
+                    "description": "",
+                    "sensitive": True,
+                },
+            ],
+        )
+
+        updated = self.store.update_document(
+            document.id, saved_query_id=saved.id, parameter_values={"public": "kept", "secret": "discarded"}
+        )
+
+        self.assertEqual(updated.parameter_values, {"public": "kept"})
+
+    def test_migrates_v3_workspace_to_v4_with_backup_and_preserves_documents(self) -> None:
         document = self.store.create_document("local", title="Existing work")
         with sqlite3.connect(self.store.path) as connection:
-            connection.execute("update workspace_meta set version = 2")
+            connection.execute("update workspace_meta set version = 3")
 
         migrated = WorkspaceStore(self.store.path)
 
         self.assertEqual(migrated.get_document(document.id).title, "Existing work")
         self.assertEqual(migrated.saved_queries(), [])
-        self.assertTrue(self.store.path.with_name("workspace.db.pre-v3.bak").is_file())
+        self.assertTrue(self.store.path.with_name("workspace.db.pre-v4.bak").is_file())
 
     def test_backs_up_existing_unversioned_workspace_before_adopting_it(self) -> None:
         path = Path(self.directory.name) / "old-workspace.db"

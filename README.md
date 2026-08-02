@@ -66,6 +66,8 @@ execution lifecycle, metadata, and result reference. Studio also includes search
 SQL generation, cancellable execution, safe write confirmation, exports, query plans, and a virtualized results grid.
 The Saved Queries Library captures deliberate reusable snapshots independently from session drafts and execution
 history, with folders, tags, favorites, search, duplication, Save as, and opening into a fresh tab. The
+library supports typed `:name` parameters and generates per-tab input forms. Values are passed separately through
+native SQLite or PostgreSQL driver binding; parameters marked sensitive are never written to `workspace.db`. The
 database stays on your machine; model providers receive schema and the question, never result rows.
 
 No terminal setup is required after launch. Studio can register, validate, rename, and remove SQLite or PostgreSQL

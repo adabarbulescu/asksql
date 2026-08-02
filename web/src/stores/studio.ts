@@ -41,6 +41,7 @@ import type {
   QueryExecution,
   QueryDocument,
   SavedQuery,
+  SavedQueryParameter,
   SetupStatus,
   TableSchema,
   WriteReview,
@@ -210,6 +211,7 @@ export const useStudioStore = defineStore("studio", {
       this.activity = "execute";
       this.error = "";
       try {
+        this.validateActiveParameters();
         this.activeDocument.lifecycle_state = "running";
         let job = await startExecution(this.selectedConnection, this.activeDocument.edited_sql.trim(), {
           historyId: this.generatedHistoryId || undefined,
@@ -217,6 +219,8 @@ export const useStudioStore = defineStore("studio", {
           model: this.generatedHistoryId ? this.model : undefined,
           source: this.generatedHistoryId ? "ai" : "manual",
           documentId: this.activeDocument.id,
+          savedQueryId: this.activeDocument.saved_query_id ?? undefined,
+          parameterValues: this.activeDocument.parameter_values,
         });
         this.activeJobId = job.jobId;
         this.activeHistoryId = job.historyId;
@@ -252,7 +256,9 @@ export const useStudioStore = defineStore("studio", {
       if (!this.selectedConnection || !this.activeDocument?.edited_sql.trim()) return;
       this.error = "";
       try {
-        await exportQuery(this.selectedConnection, this.activeDocument.edited_sql.trim(), format);
+        this.validateActiveParameters();
+        await exportQuery(this.selectedConnection, this.activeDocument.edited_sql.trim(), format,
+          this.activeDocument.saved_query_id ?? undefined, this.activeDocument.parameter_values);
       } catch (error) {
         this.error = message(error);
       }
@@ -383,6 +389,8 @@ export const useStudioStore = defineStore("studio", {
         edited_sql: this.activeDocument.edited_sql,
         selected_tables: [...this.selectedTables],
         lifecycle_state: this.activeDocument.lifecycle_state,
+        saved_query_id: this.activeDocument.saved_query_id,
+        parameter_values: this.activeDocument.parameter_values,
       };
       this.cancelPendingPersist(identifier);
       persistTimers.set(identifier, window.setTimeout(() => {
@@ -454,13 +462,14 @@ export const useStudioStore = defineStore("studio", {
       this.savedQueryFolders = library.folders;
       this.savedQueryTags = library.tags;
     },
-    async saveActiveQuery(details: { name: string; description: string; folder?: string; tags: string[] }, saveAs = false) {
+    async saveActiveQuery(details: { name: string; description: string; folder?: string; tags: string[]; parameters: SavedQueryParameter[] }, saveAs = false) {
       if (!this.activeDocument) return;
       this.cancelPendingPersist(this.activeDocument.id);
       await this.persistDocument();
       const existing = saveAs
         ? undefined
-        : this.savedQueries.find((item) => item.source_document_id === this.activeDocument?.id);
+        : this.savedQueries.find((item) => item.id === this.activeDocument?.saved_query_id)
+          ?? this.savedQueries.find((item) => item.source_document_id === this.activeDocument?.id);
       const payload = {
         name: details.name,
         description: details.description,
@@ -472,9 +481,11 @@ export const useStudioStore = defineStore("studio", {
         folder: details.folder || null,
         favorite: existing?.favorite ?? false,
         source_document_id: this.activeDocument.id,
+        parameters: details.parameters,
       };
-      if (existing) await updateSavedQuery(existing.id, payload);
-      else await createSavedQuery(payload);
+      const saved = existing ? await updateSavedQuery(existing.id, payload) : await createSavedQuery(payload);
+      this.activeDocument.saved_query_id = saved.id;
+      await this.persistDocument();
       await this.loadSavedQueries();
     },
     async openSavedQuery(item: SavedQuery) {
@@ -482,12 +493,16 @@ export const useStudioStore = defineStore("studio", {
         ? item.connection_hint
         : this.selectedConnection;
       if (!connection) return;
-      const document = await createQueryDocument(connection, item.name);
+      const defaults = Object.fromEntries(item.parameters.filter((parameter) => !parameter.sensitive && parameter.default_value != null)
+        .map((parameter) => [parameter.name, parameter.default_value]));
+      const document = await createQueryDocument(connection, item.name, item.id, defaults);
       document.question = item.natural_language_question;
       document.edited_sql = item.sql;
       document.generated_sql = item.sql;
       document.selected_tables = [...item.schema_context];
       document.lifecycle_state = "draft";
+      document.saved_query_id = item.id;
+      document.parameter_values = defaults;
       this.documents.push(document);
       this.activeDocumentId = document.id;
       await this.persistDocument();
@@ -545,6 +560,8 @@ export const useStudioStore = defineStore("studio", {
         edited_sql: this.activeDocument.edited_sql,
         selected_tables: this.selectedTables,
         lifecycle_state: this.activeDocument.lifecycle_state,
+        saved_query_id: this.activeDocument.saved_query_id,
+        parameter_values: this.activeDocument.parameter_values,
       });
       this.replaceDocument(updated);
     },
@@ -556,6 +573,27 @@ export const useStudioStore = defineStore("studio", {
       const timer = persistTimers.get(identifier);
       if (timer !== undefined) window.clearTimeout(timer);
       persistTimers.delete(identifier);
+    },
+    activeSavedQuery(): SavedQuery | undefined {
+      return this.savedQueries.find((item) => item.id === this.activeDocument?.saved_query_id);
+    },
+    validateActiveParameters() {
+      const saved = this.activeSavedQuery();
+      if (!saved || !this.activeDocument) return;
+      for (const parameter of saved.parameters) {
+        const value = this.activeDocument.parameter_values[parameter.name] ?? parameter.default_value;
+        if (parameter.required && (value === undefined || value === null || value === "")) {
+          throw new Error(`${parameter.name} is required`);
+        }
+        if (value === undefined || value === null || value === "") continue;
+        if (parameter.data_type === "integer" && !/^-?\d+$/.test(String(value))) throw new Error(`${parameter.name} must be integer`);
+        if (parameter.data_type === "decimal" && !Number.isFinite(Number(value))) throw new Error(`${parameter.name} must be decimal`);
+        if (parameter.data_type === "boolean" && ![true, false, "true", "false", "1", "0"].includes(value as never)) {
+          throw new Error(`${parameter.name} must be boolean`);
+        }
+        if (parameter.data_type === "date" && !/^\d{4}-\d{2}-\d{2}$/.test(String(value))) throw new Error(`${parameter.name} must be date`);
+        if (parameter.data_type === "datetime" && Number.isNaN(Date.parse(String(value)))) throw new Error(`${parameter.name} must be datetime`);
+      }
     },
   },
 });

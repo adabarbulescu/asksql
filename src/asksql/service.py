@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from typing import Mapping
 
 from asksql.adapters import adapter_for
 from asksql.llm import generate_sql
@@ -36,6 +37,7 @@ class QueryService:
         timeout: float | None = DEFAULT_TIMEOUT,
         cancellation: CancellationToken | None = None,
         allow_write: bool = False,
+        parameters: Mapping[str, object] | None = None,
     ) -> QueryExecution:
         started = time.monotonic()
         read_only = is_read_only(sql, self.adapter.dialect)
@@ -47,13 +49,13 @@ class QueryService:
             return self._execution(sql, started, ExecutionStatus.REFUSED, message)
         try:
             result: QueryResult | MutationResult
-            if read_only and self.adapter.dialect == "sqlite":
+            if read_only and self.adapter.dialect == "sqlite" and not parameters:
                 # Keep this stable seam for CLI integrations that patch the legacy executor.
-                result = query_result(self.db_url, sql, limit, timeout, cancellation)
+                result = query_result(self.db_url, sql, limit, timeout, cancellation, parameters)
             elif read_only:
-                result = self.adapter.query(sql, limit, timeout, cancellation)
+                result = self.adapter.query(sql, limit, timeout, cancellation, parameters)
             else:
-                result = self.adapter.execute_write(sql, timeout, cancellation)
+                result = self.adapter.execute_write(sql, timeout, cancellation, parameters)
         except QueryTimeoutError as exc:
             return self._execution(sql, started, ExecutionStatus.TIMED_OUT, str(exc))
         except QueryCancelledError as exc:
