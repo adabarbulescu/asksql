@@ -31,6 +31,10 @@ import {
   duplicateSavedQuery,
   fetchSavedQueries,
   updateSavedQuery,
+  createSemanticModel,
+  deleteSemanticModel,
+  fetchSemanticModels,
+  updateSemanticModel,
 } from "../api";
 import type {
   ConnectionProfile,
@@ -42,6 +46,8 @@ import type {
   QueryDocument,
   SavedQuery,
   SavedQueryParameter,
+  SemanticModel,
+  SemanticTraceItem,
   SetupStatus,
   TableSchema,
   WriteReview,
@@ -57,6 +63,7 @@ type Activity =
   | "save-connection"
   | "demo"
   | "model"
+  | "semantic"
   | null;
 
 const initialModel =
@@ -83,6 +90,10 @@ export const useStudioStore = defineStore("studio", {
     execution: null as QueryExecution | null,
     history: [] as HistoryEntry[],
     savedQueries: [] as SavedQuery[],
+    semanticModels: [] as SemanticModel[],
+    selectedSemanticModelId: "",
+    generationMode: "" as "" | "semantic" | "freeform",
+    semanticTrace: [] as SemanticTraceItem[],
     savedQueryFolders: [] as string[],
     savedQueryTags: [] as string[],
     librarySearch: "",
@@ -126,6 +137,7 @@ export const useStudioStore = defineStore("studio", {
         }
         await this.loadHistory();
         await this.loadSavedQueries();
+        await this.loadSemanticModels();
         await this.loadSetup();
         const historyId = new URLSearchParams(window.location.search).get("history");
         const entry = this.history.find((item) => item.id === historyId);
@@ -160,6 +172,7 @@ export const useStudioStore = defineStore("studio", {
         this.tables = details.tables;
         this.views = details.views;
         this.triggers = details.triggers;
+        await this.loadSemanticModels(name);
         const available = new Set(details.tables.map((table) => table.name));
         const saved = this.activeDocument?.selected_tables ?? [];
         this.selectedTables = saved.length ? saved.filter((table) => available.has(table)) : [...available];
@@ -191,10 +204,15 @@ export const useStudioStore = defineStore("studio", {
           (event) => { this.generationStatus = String(event.event ?? ""); },
           this.selectedTables.length === this.tables.length ? undefined : this.selectedTables,
           this.activeDocument.id,
+          this.selectedSemanticModelId || undefined,
         );
         this.activeDocument.generated_sql = generated.sql;
         this.activeDocument.edited_sql = generated.sql;
         this.activeDocument.lifecycle_state = "generated";
+        this.activeDocument.semantic_model_id = generated.modelId;
+        this.activeDocument.semantic_plan = generated.plan;
+        this.generationMode = generated.generationMode;
+        this.semanticTrace = generated.trace;
         this.activeHistoryId = generated.historyId;
         this.generatedHistoryId = generated.historyId;
         await this.loadHistory();
@@ -221,6 +239,8 @@ export const useStudioStore = defineStore("studio", {
           documentId: this.activeDocument.id,
           savedQueryId: this.activeDocument.saved_query_id ?? undefined,
           parameterValues: this.activeDocument.parameter_values,
+          semanticModelId: this.activeDocument.semantic_model_id ?? undefined,
+          semanticPlan: this.activeDocument.semantic_plan,
         });
         this.activeJobId = job.jobId;
         this.activeHistoryId = job.historyId;
@@ -258,7 +278,8 @@ export const useStudioStore = defineStore("studio", {
       try {
         this.validateActiveParameters();
         await exportQuery(this.selectedConnection, this.activeDocument.edited_sql.trim(), format,
-          this.activeDocument.saved_query_id ?? undefined, this.activeDocument.parameter_values);
+          this.activeDocument.saved_query_id ?? undefined, this.activeDocument.parameter_values,
+          this.activeDocument.semantic_model_id ?? undefined, this.activeDocument.semantic_plan);
       } catch (error) {
         this.error = message(error);
       }
@@ -391,6 +412,8 @@ export const useStudioStore = defineStore("studio", {
         lifecycle_state: this.activeDocument.lifecycle_state,
         saved_query_id: this.activeDocument.saved_query_id,
         parameter_values: this.activeDocument.parameter_values,
+        semantic_model_id: this.activeDocument.semantic_model_id,
+        semantic_plan: this.activeDocument.semantic_plan,
       };
       this.cancelPendingPersist(identifier);
       persistTimers.set(identifier, window.setTimeout(() => {
@@ -562,6 +585,8 @@ export const useStudioStore = defineStore("studio", {
         lifecycle_state: this.activeDocument.lifecycle_state,
         saved_query_id: this.activeDocument.saved_query_id,
         parameter_values: this.activeDocument.parameter_values,
+        semantic_model_id: this.activeDocument.semantic_model_id,
+        semantic_plan: this.activeDocument.semantic_plan,
       });
       this.replaceDocument(updated);
     },
@@ -594,6 +619,34 @@ export const useStudioStore = defineStore("studio", {
         if (parameter.data_type === "date" && !/^\d{4}-\d{2}-\d{2}$/.test(String(value))) throw new Error(`${parameter.name} must be date`);
         if (parameter.data_type === "datetime" && Number.isNaN(Date.parse(String(value)))) throw new Error(`${parameter.name} must be datetime`);
       }
+    },
+    async loadSemanticModels(connection?: string) {
+      const target = connection ?? this.selectedConnection;
+      this.semanticModels = target ? await fetchSemanticModels(target) : [];
+      const documentModel = this.activeDocument?.semantic_model_id;
+      this.selectedSemanticModelId = this.semanticModels.some((item) => item.id === documentModel)
+        ? documentModel ?? ""
+        : this.semanticModels[0]?.id ?? "";
+    },
+    async saveSemanticModel(model: Omit<SemanticModel, "id" | "created_at" | "updated_at">, identifier?: string) {
+      this.activity = "semantic";
+      this.error = "";
+      try {
+        const saved = identifier ? await updateSemanticModel(identifier, model) : await createSemanticModel(model);
+        await this.loadSemanticModels(saved.connection_hint);
+        this.selectedSemanticModelId = saved.id;
+        return saved;
+      } catch (error) {
+        this.error = message(error);
+        throw error;
+      } finally {
+        this.activity = null;
+      }
+    },
+    async removeSemanticModel(identifier: string) {
+      await deleteSemanticModel(identifier);
+      if (this.selectedSemanticModelId === identifier) this.selectedSemanticModelId = "";
+      await this.loadSemanticModels();
     },
   },
 });

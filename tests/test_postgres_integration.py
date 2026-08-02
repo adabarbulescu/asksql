@@ -3,6 +3,7 @@ import unittest
 
 from asksql.adapters import adapter_for
 from asksql.models import ExecutionStatus
+from asksql.semantic import SemanticQueryPlan, compile_query, model_from_payload
 from asksql.service import QueryService
 
 
@@ -43,6 +44,42 @@ class PostgreSQLIntegrationTest(unittest.TestCase):
 
         self.assertEqual(execution.status, ExecutionStatus.SUCCEEDED)
         self.assertEqual(execution.result.rows, [(42,)])  # type: ignore[union-attr]
+
+    def test_semantic_query_uses_postgres_compiler_and_native_binding(self) -> None:
+        model = model_from_payload(
+            {
+                "name": "Integration",
+                "connection_hint": "postgres",
+                "entities": [
+                    {
+                        "name": "items",
+                        "source_table": "asksql_integration",
+                        "primary_key": "id",
+                        "description": "",
+                    }
+                ],
+                "metrics": [
+                    {
+                        "name": "items_count",
+                        "label": "Items count",
+                        "description": "",
+                        "entity": "items",
+                        "aggregation": "count_distinct",
+                        "expression": "id",
+                        "filters": [{"column": "name", "operator": "eq", "value": "studio"}],
+                        "format": "integer",
+                    }
+                ],
+                "dimensions": [],
+                "relationships": [],
+            },
+            identifier="integration",
+        )
+        compiled = compile_query(model, SemanticQueryPlan("integration", ("items_count",)), "postgres")
+        execution = self.service.execute(compiled.sql, parameters=compiled.parameters)
+
+        self.assertEqual(execution.status, ExecutionStatus.SUCCEEDED)
+        self.assertEqual(execution.result.rows, [(1,)])  # type: ignore[union-attr]
 
 
 if __name__ == "__main__":

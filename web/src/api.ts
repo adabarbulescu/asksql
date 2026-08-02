@@ -11,6 +11,9 @@ import type {
   SavedQueryLibrary,
   SchemaDetails,
   SetupStatus,
+  SemanticModel,
+  SemanticQueryPlan,
+  SemanticTraceItem,
   WriteReview,
 } from "./types";
 
@@ -36,7 +39,7 @@ export function createQueryDocument(
 
 export function updateQueryDocument(
   identifier: string,
-  changes: Partial<Pick<QueryDocument, "title" | "connection" | "selected_tables" | "question" | "generated_sql" | "edited_sql" | "lifecycle_state" | "saved_query_id" | "parameter_values">>,
+  changes: Partial<Pick<QueryDocument, "title" | "connection" | "selected_tables" | "question" | "generated_sql" | "edited_sql" | "lifecycle_state" | "saved_query_id" | "parameter_values" | "semantic_model_id" | "semantic_plan">>,
 ): Promise<QueryDocument> {
   return request<QueryDocument>(`/api/workspace/documents/${encodeURIComponent(identifier)}`, {
     method: "PATCH",
@@ -77,6 +80,33 @@ export function duplicateSavedQuery(identifier: string, name?: string): Promise<
 
 export function deleteSavedQuery(identifier: string): Promise<void> {
   return request<void>(`/api/saved-queries/${encodeURIComponent(identifier)}`, { method: "DELETE" });
+}
+
+export async function fetchSemanticModels(connection?: string): Promise<SemanticModel[]> {
+  const suffix = connection ? `?connection=${encodeURIComponent(connection)}` : "";
+  return (await request<{ semanticModels: SemanticModel[] }>(`/api/semantic-models${suffix}`)).semanticModels;
+}
+
+export function createSemanticModel(payload: Omit<SemanticModel, "id" | "created_at" | "updated_at">): Promise<SemanticModel> {
+  return request<SemanticModel>("/api/semantic-models", { method: "POST", body: JSON.stringify(payload) });
+}
+
+export function updateSemanticModel(identifier: string, payload: Omit<SemanticModel, "id" | "created_at" | "updated_at">): Promise<SemanticModel> {
+  return request<SemanticModel>(`/api/semantic-models/${encodeURIComponent(identifier)}`, {
+    method: "PUT", body: JSON.stringify(payload),
+  });
+}
+
+export function deleteSemanticModel(identifier: string): Promise<void> {
+  return request<void>(`/api/semantic-models/${encodeURIComponent(identifier)}`, { method: "DELETE" });
+}
+
+export function compileSemanticModel(
+  identifier: string, connection: string, metrics: string[], dimensions: { name: string; granularity: string | null }[],
+): Promise<{ sql: string; parameters: Record<string, unknown>; plan: SemanticQueryPlan; trace: SemanticTraceItem[] }> {
+  return request(`/api/semantic-models/${encodeURIComponent(identifier)}/compile`, {
+    method: "POST", body: JSON.stringify({ connection, metrics, dimensions }),
+  });
 }
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
@@ -200,11 +230,12 @@ export async function generateSqlStream(
   onEvent?: (event: Record<string, unknown>) => void,
   tables?: string[],
   documentId?: string,
-): Promise<{ sql: string; historyId: string }> {
+  semanticModelId?: string,
+): Promise<{ sql: string; historyId: string; generationMode: "semantic" | "freeform"; modelId: string | null; plan: SemanticQueryPlan | null; trace: SemanticTraceItem[] }> {
   const response = await fetch("/api/query/generate-stream", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ connection, question, model, tables, document_id: documentId }),
+    body: JSON.stringify({ connection, question, model, tables, document_id: documentId, semantic_model_id: semanticModelId }),
   });
   if (!response.ok || !response.body) {
     throw new Error(`SQL generation failed (${response.status})`);
@@ -212,7 +243,7 @@ export async function generateSqlStream(
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffered = "";
-  let completed: { sql: string; historyId: string } | undefined;
+  let completed: { sql: string; historyId: string; generationMode: "semantic" | "freeform"; modelId: string | null; plan: SemanticQueryPlan | null; trace: SemanticTraceItem[] } | undefined;
   while (true) {
     const { value, done } = await reader.read();
     buffered += decoder.decode(value, { stream: !done });
@@ -224,7 +255,13 @@ export async function generateSqlStream(
       onEvent?.(event);
       if (event.event === "error") throw new Error(String(event.detail ?? "SQL generation failed"));
       if (event.event === "completed") {
-        completed = { sql: String(event.sql), historyId: String(event.historyId) };
+        completed = {
+          sql: String(event.sql), historyId: String(event.historyId),
+          generationMode: event.generationMode === "semantic" ? "semantic" : "freeform",
+          modelId: event.modelId ? String(event.modelId) : null,
+          plan: (event.plan as SemanticQueryPlan | null) ?? null,
+          trace: (event.trace as SemanticTraceItem[]) ?? [],
+        };
       }
     }
     if (done) break;
@@ -236,7 +273,7 @@ export async function generateSqlStream(
 export function startExecution(
   connection: string,
   sql: string,
-  metadata: { historyId?: string; question?: string; model?: string; source?: "ai" | "manual"; documentId?: string; savedQueryId?: string; parameterValues?: Record<string, unknown> } = {},
+  metadata: { historyId?: string; question?: string; model?: string; source?: "ai" | "manual"; documentId?: string; savedQueryId?: string; parameterValues?: Record<string, unknown>; semanticModelId?: string; semanticPlan?: SemanticQueryPlan | null } = {},
 ): Promise<ExecutionJob> {
   return request<ExecutionJob>("/api/query/jobs", {
     method: "POST",
@@ -250,6 +287,8 @@ export function startExecution(
       document_id: metadata.documentId,
       saved_query_id: metadata.savedQueryId,
       parameter_values: metadata.parameterValues,
+      semantic_model_id: metadata.semanticModelId,
+      semantic_plan: metadata.semanticPlan,
     }),
   });
 }
@@ -268,11 +307,14 @@ export async function exportQuery(
   format: "csv" | "json" | "markdown",
   savedQueryId?: string,
   parameterValues: Record<string, unknown> = {},
+  semanticModelId?: string,
+  semanticPlan?: SemanticQueryPlan | null,
 ): Promise<void> {
   const response = await fetch("/api/query/export", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ connection, sql, format, saved_query_id: savedQueryId, parameter_values: parameterValues }),
+    body: JSON.stringify({ connection, sql, format, saved_query_id: savedQueryId, parameter_values: parameterValues,
+      semantic_model_id: semanticModelId, semantic_plan: semanticPlan }),
   });
   if (!response.ok) {
     const payload = (await response.json()) as { detail?: string };

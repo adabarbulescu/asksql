@@ -257,6 +257,103 @@ class StudioApiTest(unittest.TestCase):
         self.assertEqual(duplicated["name"], "Project names copy")
         self.assertEqual(deleted.status_code, 204)
 
+    def test_semantic_model_crud_compile_generate_and_execute(self) -> None:
+        payload = {
+            "name": "Projects business model",
+            "description": "Canonical project metrics",
+            "connection_hint": "local",
+            "entities": [{"name": "projects", "source_table": "projects", "primary_key": "id", "description": ""}],
+            "metrics": [
+                {
+                    "name": "projects_count",
+                    "label": "Projects count",
+                    "description": "Number of projects",
+                    "entity": "projects",
+                    "aggregation": "count_distinct",
+                    "expression": "id",
+                    "filters": [],
+                    "format": "integer",
+                }
+            ],
+            "dimensions": [
+                {
+                    "name": "project",
+                    "label": "Project",
+                    "description": "Project name",
+                    "entity": "projects",
+                    "expression": "name",
+                    "data_type": "text",
+                    "time_granularities": [],
+                }
+            ],
+            "relationships": [],
+        }
+        created = self.client.post("/api/semantic-models", json=payload)
+        identifier = created.json()["id"]
+        compiled = self.client.post(
+            f"/api/semantic-models/{identifier}/compile",
+            json={"connection": "local", "metrics": ["projects_count"], "dimensions": [{"name": "project"}]},
+        )
+        generated = self.client.post(
+            "/api/query/generate",
+            json={
+                "connection": "local",
+                "question": "Show projects count by project",
+                "model": "ollama:not-needed",
+                "semantic_model_id": identifier,
+            },
+        )
+        executed = self.client.post(
+            "/api/query/execute",
+            json={
+                "connection": "local",
+                "sql": generated.json()["sql"],
+                "semantic_model_id": identifier,
+                "semantic_plan": generated.json()["plan"],
+            },
+        )
+
+        self.assertEqual(created.status_code, 201)
+        self.assertIn('count(distinct t0."id")', compiled.json()["sql"])
+        self.assertEqual(generated.json()["generationMode"], "semantic")
+        self.assertEqual(executed.json()["status"], "succeeded")
+        self.assertEqual(executed.json()["result"]["rows"], [["AskSQL Studio", 1]])
+        self.assertEqual(
+            len(self.client.get("/api/semantic-models", params={"connection": "local"}).json()["semanticModels"]), 1
+        )
+
+        payload["description"] = "Updated definitions"
+        updated = self.client.put(f"/api/semantic-models/{identifier}", json=payload)
+        self.assertEqual(updated.json()["description"], "Updated definitions")
+        self.assertEqual(self.client.delete(f"/api/semantic-models/{identifier}").status_code, 204)
+
+    def test_semantic_model_rejects_unknown_physical_columns(self) -> None:
+        response = self.client.post(
+            "/api/semantic-models",
+            json={
+                "name": "Invalid",
+                "connection_hint": "local",
+                "entities": [{"name": "projects", "source_table": "projects", "primary_key": "id", "description": ""}],
+                "metrics": [
+                    {
+                        "name": "revenue",
+                        "label": "Revenue",
+                        "description": "",
+                        "entity": "projects",
+                        "aggregation": "sum",
+                        "expression": "missing_column",
+                        "filters": [],
+                        "format": "number",
+                    }
+                ],
+                "dimensions": [],
+                "relationships": [],
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("unknown column", response.json()["detail"])
+
     def test_parameterized_saved_query_validates_binds_exports_and_hides_sensitive_values(self) -> None:
         document = self.client.post(
             "/api/workspace/documents", json={"connection": "local", "title": "Parameterized"}

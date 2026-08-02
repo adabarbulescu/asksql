@@ -13,8 +13,9 @@ from pathlib import Path
 from asksql.connections import config_directory
 from asksql.models import ExecutionStatus, MutationResult, QueryExecution, QueryResult
 from asksql.parameters import ParameterDefinition
+from asksql.semantic import SemanticModel, model_from_payload
 
-WORKSPACE_VERSION = 4
+WORKSPACE_VERSION = 5
 
 DOCUMENT_STATES = {"draft", "generated", "running", "completed", "failed", "cancelled"}
 
@@ -57,6 +58,8 @@ class QueryDocument:
     result_reference: str | None
     saved_query_id: str | None
     parameter_values: dict[str, object]
+    semantic_model_id: str | None
+    semantic_plan: dict[str, object] | None
     created_at: str
     updated_at: str
 
@@ -242,6 +245,8 @@ class WorkspaceStore:
         selected_tables: list[str] | None = None,
         saved_query_id: str | None = None,
         parameter_values: dict[str, object] | None = None,
+        semantic_model_id: str | None = None,
+        semantic_plan: dict[str, object] | None = None,
     ) -> QueryDocument:
         identifier = uuid.uuid4().hex
         timestamp = _timestamp()
@@ -252,7 +257,8 @@ class WorkspaceStore:
                 insert into query_documents(
                     id, title, connection_name, selected_tables, question, generated_sql, edited_sql,
                     lifecycle_state, position, created_at, updated_at, saved_query_id, parameter_values
-                ) values (?, ?, ?, ?, ?, '', ?, 'draft', ?, ?, ?, ?, ?)
+                    ,semantic_model_id, semantic_plan
+                ) values (?, ?, ?, ?, ?, '', ?, 'draft', ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     identifier,
@@ -266,6 +272,8 @@ class WorkspaceStore:
                     timestamp,
                     saved_query_id,
                     _parameter_values_json(parameter_values or {}, self._sensitive_names(saved_query_id)),
+                    semantic_model_id,
+                    _json_object(semantic_plan),
                 ),
             )
             connection.execute(
@@ -297,6 +305,8 @@ class WorkspaceStore:
             "result_reference": "result_reference",
             "saved_query_id": "saved_query_id",
             "parameter_values": "parameter_values",
+            "semantic_model_id": "semantic_model_id",
+            "semantic_plan": "semantic_plan",
         }
         assignments: list[str] = []
         values: list[object] = []
@@ -314,6 +324,8 @@ class WorkspaceStore:
                 value = _parameter_values_json(
                     value if isinstance(value, dict) else {}, self._sensitive_names(saved_query_id)
                 )
+            elif name == "semantic_plan":
+                value = _json_object(value if isinstance(value, dict) else None)
             elif name == "lifecycle_state" and value not in DOCUMENT_STATES:
                 raise ValueError(f"invalid query document state: {value}")
             assignments.append(f"{column} = ?")
@@ -536,6 +548,60 @@ class WorkspaceStore:
             if cursor.rowcount != 1:
                 raise KeyError(f"unknown saved query: {identifier}")
 
+    def create_semantic_model(self, payload: dict[str, object]) -> SemanticModel:
+        identifier = uuid.uuid4().hex
+        timestamp = _timestamp()
+        model = model_from_payload(payload, identifier=identifier, created_at=timestamp, updated_at=timestamp)
+        with self._connect() as connection:
+            connection.execute(
+                "insert into semantic_models(id, name, connection_hint, definition, created_at, updated_at) "
+                "values (?, ?, ?, ?, ?, ?)",
+                (
+                    identifier,
+                    model.name,
+                    model.connection_hint,
+                    _semantic_definition(model),
+                    timestamp,
+                    timestamp,
+                ),
+            )
+        return self.get_semantic_model(identifier)
+
+    def get_semantic_model(self, identifier: str) -> SemanticModel:
+        with self._connect() as connection:
+            row = connection.execute("select * from semantic_models where id = ?", (identifier,)).fetchone()
+        if row is None:
+            raise KeyError(f"unknown semantic model: {identifier}")
+        return _semantic_model(row)
+
+    def semantic_models(self, connection_hint: str | None = None) -> list[SemanticModel]:
+        with self._connect() as connection:
+            if connection_hint:
+                rows = connection.execute(
+                    "select * from semantic_models where connection_hint = ? order by updated_at desc",
+                    (connection_hint,),
+                ).fetchall()
+            else:
+                rows = connection.execute("select * from semantic_models order by updated_at desc").fetchall()
+        return [_semantic_model(row) for row in rows]
+
+    def update_semantic_model(self, identifier: str, payload: dict[str, object]) -> SemanticModel:
+        current = self.get_semantic_model(identifier)
+        timestamp = _timestamp()
+        model = model_from_payload(payload, identifier=identifier, created_at=current.created_at, updated_at=timestamp)
+        with self._connect() as connection:
+            connection.execute(
+                "update semantic_models set name = ?, connection_hint = ?, definition = ?, updated_at = ? where id = ?",
+                (model.name, model.connection_hint, _semantic_definition(model), timestamp, identifier),
+            )
+        return self.get_semantic_model(identifier)
+
+    def delete_semantic_model(self, identifier: str) -> None:
+        with self._connect() as connection:
+            cursor = connection.execute("delete from semantic_models where id = ?", (identifier,))
+            if cursor.rowcount != 1:
+                raise KeyError(f"unknown semantic model: {identifier}")
+
     def _sensitive_names(self, saved_query_id: str | None) -> set[str]:
         if not saved_query_id:
             return set()
@@ -671,17 +737,29 @@ class WorkspaceStore:
                     ,parameters text not null default '[]'
                 );
                 create index if not exists saved_queries_updated on saved_queries(favorite desc, updated_at desc);
+                create table if not exists semantic_models(
+                    id text primary key,
+                    name text not null,
+                    connection_hint text not null,
+                    definition text not null,
+                    created_at text not null,
+                    updated_at text not null
+                );
+                create index if not exists semantic_models_connection_updated
+                    on semantic_models(connection_hint, updated_at desc);
                 """
             )
             _ensure_column(connection, "query_documents", "saved_query_id", "text")
             _ensure_column(connection, "query_documents", "parameter_values", "text not null default '{}'")
             _ensure_column(connection, "saved_queries", "parameters", "text not null default '[]'")
+            _ensure_column(connection, "query_documents", "semantic_model_id", "text")
+            _ensure_column(connection, "query_documents", "semantic_plan", "text")
             row = connection.execute("select version from workspace_meta limit 1").fetchone()
             if row is None:
                 if existed:
                     self._backup("pre-migration")
                 connection.execute("insert into workspace_meta(version) values (?)", (WORKSPACE_VERSION,))
-            elif row[0] in {1, 2, 3}:
+            elif row[0] in {1, 2, 3, 4}:
                 self._backup(f"pre-v{WORKSPACE_VERSION}")
                 connection.execute("update workspace_meta set version = ?", (WORKSPACE_VERSION,))
             elif row[0] != WORKSPACE_VERSION:
@@ -746,6 +824,8 @@ def _query_document(row: sqlite3.Row) -> QueryDocument:
         result_reference=row["result_reference"],
         saved_query_id=row["saved_query_id"],
         parameter_values=dict(json.loads(row["parameter_values"])),
+        semantic_model_id=row["semantic_model_id"],
+        semantic_plan=dict(json.loads(row["semantic_plan"])) if row["semantic_plan"] else None,
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
     )
@@ -768,6 +848,26 @@ def _saved_query(row: sqlite3.Row) -> SavedQuery:
         source_document_id=row["source_document_id"],
         parameters=list(json.loads(row["parameters"])),
     )
+
+
+def _semantic_model(row: sqlite3.Row) -> SemanticModel:
+    return model_from_payload(
+        json.loads(row["definition"]),
+        identifier=str(row["id"]),
+        created_at=str(row["created_at"]),
+        updated_at=str(row["updated_at"]),
+    )
+
+
+def _semantic_definition(model: SemanticModel) -> str:
+    payload = model.payload()
+    for key in ("id", "created_at", "updated_at"):
+        payload.pop(key, None)
+    return json.dumps(payload, separators=(",", ":"), default=str)
+
+
+def _json_object(value: dict[str, object] | None) -> str | None:
+    return json.dumps(value, separators=(",", ":"), default=str) if value is not None else None
 
 
 def _document_title(value: str) -> str:

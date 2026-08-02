@@ -166,16 +166,50 @@ class WorkspaceStoreTest(unittest.TestCase):
 
         self.assertEqual(updated.parameter_values, {"public": "kept"})
 
-    def test_migrates_v3_workspace_to_v4_with_backup_and_preserves_documents(self) -> None:
+    def test_persists_semantic_model_and_document_plan_separately(self) -> None:
+        model = self.store.create_semantic_model(
+            {
+                "name": "Projects",
+                "connection_hint": "local",
+                "entities": [{"name": "projects", "source_table": "projects", "primary_key": "id", "description": ""}],
+                "metrics": [
+                    {
+                        "name": "projects_count",
+                        "label": "Projects count",
+                        "description": "",
+                        "entity": "projects",
+                        "aggregation": "count_distinct",
+                        "expression": "id",
+                        "filters": [],
+                        "format": "integer",
+                    }
+                ],
+                "dimensions": [],
+                "relationships": [],
+            }
+        )
+        document = self.store.create_document(
+            "local",
+            semantic_model_id=model.id,
+            semantic_plan={"model_id": model.id, "metrics": ["projects_count"], "dimensions": [], "filters": []},
+        )
+
+        reopened = WorkspaceStore(self.store.path)
+        restored = reopened.get_document(document.id)
+        self.assertEqual(reopened.get_semantic_model(model.id).metrics[0].name, "projects_count")
+        self.assertEqual(restored.semantic_model_id, model.id)
+        self.assertEqual(restored.semantic_plan["metrics"], ["projects_count"])  # type: ignore[index]
+
+    def test_migrates_v4_workspace_to_v5_with_backup_and_preserves_documents(self) -> None:
         document = self.store.create_document("local", title="Existing work")
         with sqlite3.connect(self.store.path) as connection:
-            connection.execute("update workspace_meta set version = 3")
+            connection.execute("update workspace_meta set version = 4")
 
         migrated = WorkspaceStore(self.store.path)
 
         self.assertEqual(migrated.get_document(document.id).title, "Existing work")
         self.assertEqual(migrated.saved_queries(), [])
-        self.assertTrue(self.store.path.with_name("workspace.db.pre-v4.bak").is_file())
+        self.assertTrue(self.store.path.with_name("workspace.db.pre-v5.bak").is_file())
 
     def test_backs_up_existing_unversioned_workspace_before_adopting_it(self) -> None:
         path = Path(self.directory.name) / "old-workspace.db"

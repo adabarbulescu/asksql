@@ -64,6 +64,8 @@ export interface QueryDocument {
   updated_at: string;
   saved_query_id: string | null;
   parameter_values: Record<string, unknown>;
+  semantic_model_id: string | null;
+  semantic_plan: SemanticQueryPlan | null;
 }
 
 export interface WorkspaceSnapshot {
@@ -104,6 +106,76 @@ export interface SavedQueryLibrary {
   savedQueries: SavedQuery[];
   folders: string[];
   tags: string[];
+}
+
+export interface SemanticEntity {
+  name: string;
+  source_table: string;
+  primary_key: string;
+  description: string;
+}
+
+export interface SemanticMetricFilter {
+  column: string;
+  operator: "eq" | "neq" | "gt" | "gte" | "lt" | "lte";
+  value: unknown;
+}
+
+export interface SemanticMetric {
+  name: string;
+  label: string;
+  description: string;
+  entity: string;
+  aggregation: "sum" | "count" | "count_distinct" | "average" | "minimum" | "maximum";
+  expression: string;
+  filters: SemanticMetricFilter[];
+  format: string;
+}
+
+export interface SemanticDimension {
+  name: string;
+  label: string;
+  description: string;
+  entity: string;
+  expression: string;
+  data_type: string;
+  time_granularities: string[];
+}
+
+export interface SemanticRelationship {
+  name: string;
+  from_entity: string;
+  to_entity: string;
+  from_column: string;
+  to_column: string;
+  join_type: "left" | "inner";
+  cardinality: "many_to_one" | "one_to_many" | "one_to_one";
+}
+
+export interface SemanticModel {
+  id: string;
+  name: string;
+  description: string;
+  connection_hint: string;
+  entities: SemanticEntity[];
+  metrics: SemanticMetric[];
+  dimensions: SemanticDimension[];
+  relationships: SemanticRelationship[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SemanticQueryPlan {
+  model_id: string;
+  metrics: string[];
+  dimensions: { name: string; granularity: string | null }[];
+  filters: Record<string, unknown>[];
+}
+
+export interface SemanticTraceItem {
+  kind: "metric" | "dimension" | "relationship";
+  name: string;
+  sql: string;
 }
 
 export interface Column {

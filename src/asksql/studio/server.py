@@ -21,10 +21,27 @@ from asksql.demo import create_demo_db
 from asksql.diagnostics import diagnostics
 from asksql.export import format_result
 from asksql.llm import check_model
-from asksql.models import ConnectionProfile, ExecutionStatus, MutationResult, QueryExecution, QueryResult, TableSchema
+from asksql.models import (
+    ConnectionProfile,
+    ExecutionStatus,
+    GeneratedQuery,
+    MutationResult,
+    QueryExecution,
+    QueryResult,
+    TableSchema,
+)
 from asksql.parameters import ParameterDefinition, detect_parameters, validate_and_bind
 from asksql.safety import is_read_only, is_write
 from asksql.secrets import set_secret
+from asksql.semantic import (
+    SemanticModel,
+    SemanticModelError,
+    SemanticQueryPlan,
+    compile_query,
+    model_from_payload,
+    resolve_question,
+    validate_model,
+)
 from asksql.service import QueryService
 from asksql.setup import DEFAULT_MODEL, setup_status
 from asksql.sqlite import DEFAULT_LIMIT, DEFAULT_TIMEOUT, MAX_LIMIT, inspect
@@ -39,6 +56,7 @@ class GenerateRequest(BaseModel):
     model: str = Field(default=DEFAULT_MODEL, min_length=1, max_length=200)
     tables: list[str] | None = Field(default=None, max_length=200)
     document_id: str | None = Field(default=None, max_length=64)
+    semantic_model_id: str | None = Field(default=None, max_length=64)
 
 
 class ExecuteRequest(BaseModel):
@@ -53,6 +71,8 @@ class ExecuteRequest(BaseModel):
     document_id: str | None = Field(default=None, max_length=64)
     saved_query_id: str | None = Field(default=None, max_length=64)
     parameter_values: dict[str, object] = Field(default_factory=dict)
+    semantic_model_id: str | None = Field(default=None, max_length=64)
+    semantic_plan: dict[str, object] | None = None
 
 
 class DocumentCreateRequest(BaseModel):
@@ -63,6 +83,8 @@ class DocumentCreateRequest(BaseModel):
     selected_tables: list[str] = Field(default_factory=list, max_length=200)
     saved_query_id: str | None = Field(default=None, max_length=64)
     parameter_values: dict[str, object] = Field(default_factory=dict)
+    semantic_model_id: str | None = Field(default=None, max_length=64)
+    semantic_plan: dict[str, object] | None = None
 
 
 class DocumentUpdateRequest(BaseModel):
@@ -75,6 +97,24 @@ class DocumentUpdateRequest(BaseModel):
     lifecycle_state: str | None = Field(default=None, pattern="^(draft|generated|running|completed|failed|cancelled)$")
     saved_query_id: str | None = Field(default=None, max_length=64)
     parameter_values: dict[str, object] | None = None
+    semantic_model_id: str | None = Field(default=None, max_length=64)
+    semantic_plan: dict[str, object] | None = None
+
+
+class SemanticModelRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=2_000)
+    connection_hint: str = Field(min_length=1, max_length=100)
+    entities: list[dict[str, object]] = Field(default_factory=list, max_length=200)
+    metrics: list[dict[str, object]] = Field(default_factory=list, max_length=500)
+    dimensions: list[dict[str, object]] = Field(default_factory=list, max_length=500)
+    relationships: list[dict[str, object]] = Field(default_factory=list, max_length=500)
+
+
+class SemanticCompileRequest(BaseModel):
+    connection: str = Field(min_length=1, max_length=100)
+    metrics: list[str] = Field(min_length=1, max_length=50)
+    dimensions: list[dict[str, str | None]] = Field(default_factory=list, max_length=50)
 
 
 class SavedQueryParameterRequest(BaseModel):
@@ -148,6 +188,8 @@ class ExportRequest(BaseModel):
     timeout: float = Field(default=DEFAULT_TIMEOUT, gt=0, le=3600)
     saved_query_id: str | None = Field(default=None, max_length=64)
     parameter_values: dict[str, object] = Field(default_factory=dict)
+    semantic_model_id: str | None = Field(default=None, max_length=64)
+    semantic_plan: dict[str, object] | None = None
 
 
 class WriteReviewRequest(BaseModel):
@@ -181,7 +223,7 @@ def create_app(
     execution_manager = jobs or ExecutionManager()
     write_intents = writes or WriteIntentManager()
     assets = static_dir or Path(__file__).with_name("static")
-    app = FastAPI(title="AskSQL Studio", version="0.6.0", docs_url=None, redoc_url=None)
+    app = FastAPI(title="AskSQL Studio", version="0.7.0", docs_url=None, redoc_url=None)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "testserver"])
 
     @app.get("/api/health")
@@ -226,6 +268,8 @@ def create_app(
                 selected_tables=request.selected_tables,
                 saved_query_id=request.saved_query_id,
                 parameter_values=request.parameter_values,
+                semantic_model_id=request.semantic_model_id,
+                semantic_plan=request.semantic_plan,
             ).payload()
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -234,7 +278,7 @@ def create_app(
     def update_document(
         identifier: Annotated[str, ApiPath(min_length=1)], request: DocumentUpdateRequest
     ) -> dict[str, object]:
-        changes = request.model_dump(exclude_none=True)
+        changes = request.model_dump(exclude_unset=True)
         if request.connection is not None:
             _profile(connection_store, request.connection)
         try:
@@ -320,6 +364,66 @@ def create_app(
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return Response(status_code=204)
+
+    @app.get("/api/semantic-models")
+    def list_semantic_models(
+        connection: Annotated[str | None, Query(max_length=100)] = None,
+    ) -> dict[str, object]:
+        return {"semanticModels": [item.payload() for item in workspace_store.semantic_models(connection)]}
+
+    @app.post("/api/semantic-models", status_code=201)
+    def create_semantic_model(request: SemanticModelRequest) -> dict[str, object]:
+        payload = request.model_dump()
+        try:
+            _validate_semantic_model(connection_store, model_from_payload(payload))
+            return workspace_store.create_semantic_model(payload).payload()
+        except (KeyError, SemanticModelError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/semantic-models/{identifier}")
+    def get_semantic_model(identifier: Annotated[str, ApiPath(min_length=1)]) -> dict[str, object]:
+        try:
+            return workspace_store.get_semantic_model(identifier).payload()
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.put("/api/semantic-models/{identifier}")
+    def update_semantic_model(
+        identifier: Annotated[str, ApiPath(min_length=1)], request: SemanticModelRequest
+    ) -> dict[str, object]:
+        try:
+            workspace_store.get_semantic_model(identifier)
+            payload = request.model_dump()
+            _validate_semantic_model(connection_store, model_from_payload(payload))
+            return workspace_store.update_semantic_model(identifier, payload).payload()
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (SemanticModelError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.delete("/api/semantic-models/{identifier}", status_code=204)
+    def delete_semantic_model(identifier: Annotated[str, ApiPath(min_length=1)]) -> Response:
+        try:
+            workspace_store.delete_semantic_model(identifier)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return Response(status_code=204)
+
+    @app.post("/api/semantic-models/{identifier}/compile")
+    def compile_semantic_model(
+        identifier: Annotated[str, ApiPath(min_length=1)], request: SemanticCompileRequest
+    ) -> dict[str, object]:
+        profile = _profile(connection_store, request.connection)
+        try:
+            model = workspace_store.get_semantic_model(identifier)
+            if model.connection_hint != request.connection:
+                raise SemanticModelError("semantic model belongs to a different connection")
+            plan = SemanticQueryPlan(identifier, tuple(request.metrics), tuple(request.dimensions))
+            return compile_query(model, plan, adapter_for(profile.url).dialect).payload()
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except SemanticModelError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.get("/api/connections")
     def connections() -> dict[str, list[dict[str, str]]]:
@@ -436,10 +540,10 @@ def create_app(
         return {"columns": plan.columns, "rows": plan.rows}
 
     @app.post("/api/query/generate")
-    def generate(request: GenerateRequest) -> dict[str, str]:
+    def generate(request: GenerateRequest) -> dict[str, object]:
         profile = _profile(connection_store, request.connection)
         try:
-            generated = QueryService(profile.url, request.model).generate(request.question, request.tables)
+            generated, semantic = _generate_with_semantics(profile, request, workspace_store)
         except Exception as exc:
             raise HTTPException(status_code=502, detail=f"SQL generation failed: {exc}") from exc
         history = workspace_store.create_generated(
@@ -455,6 +559,8 @@ def create_app(
                     generated_sql=generated.sql,
                     edited_sql=generated.sql,
                     lifecycle_state="generated",
+                    semantic_model_id=semantic.get("modelId"),
+                    semantic_plan=semantic.get("plan"),
                 )
             except KeyError as exc:
                 raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -463,6 +569,7 @@ def create_app(
             "sql": generated.sql,
             "model": generated.model,
             "historyId": history.id,
+            **semantic,
         }
 
     @app.post("/api/query/generate-stream")
@@ -472,7 +579,7 @@ def create_app(
         def events() -> Iterator[str]:
             yield json.dumps({"event": "started", "model": request.model}) + "\n"
             try:
-                generated = QueryService(profile.url, request.model).generate(request.question, request.tables)
+                generated, semantic = _generate_with_semantics(profile, request, workspace_store)
                 history = workspace_store.create_generated(
                     request.connection, generated.question, generated.sql, generated.model
                 )
@@ -485,6 +592,8 @@ def create_app(
                         generated_sql=generated.sql,
                         edited_sql=generated.sql,
                         lifecycle_state="generated",
+                        semantic_model_id=semantic.get("modelId"),
+                        semantic_plan=semantic.get("plan"),
                     )
                 yield (
                     json.dumps(
@@ -494,6 +603,7 @@ def create_app(
                             "sql": generated.sql,
                             "model": generated.model,
                             "historyId": history.id,
+                            **semantic,
                         }
                     )
                     + "\n"
@@ -521,7 +631,13 @@ def create_app(
         profile = _profile(connection_store, request.connection)
         try:
             parameters = _bound_parameters(
-                workspace_store, request.saved_query_id, request.sql, request.parameter_values
+                workspace_store,
+                request.saved_query_id,
+                request.sql,
+                request.parameter_values,
+                semantic_model_id=request.semantic_model_id,
+                semantic_plan=request.semantic_plan,
+                dialect=adapter_for(profile.url).dialect,
             )
         except (KeyError, ValueError) as exc:
             raise HTTPException(status_code=404 if isinstance(exc, KeyError) else 422, detail=str(exc)) from exc
@@ -553,7 +669,13 @@ def create_app(
         profile = _profile(connection_store, request.connection)
         try:
             parameters = _bound_parameters(
-                workspace_store, request.saved_query_id, request.sql, request.parameter_values
+                workspace_store,
+                request.saved_query_id,
+                request.sql,
+                request.parameter_values,
+                semantic_model_id=request.semantic_model_id,
+                semantic_plan=request.semantic_plan,
+                dialect=adapter_for(profile.url).dialect,
             )
         except (KeyError, ValueError) as exc:
             raise HTTPException(status_code=404 if isinstance(exc, KeyError) else 422, detail=str(exc)) from exc
@@ -578,6 +700,8 @@ def create_app(
                     error=None,
                     saved_query_id=request.saved_query_id,
                     parameter_values=request.parameter_values,
+                    semantic_model_id=request.semantic_model_id,
+                    semantic_plan=request.semantic_plan,
                 )
             except KeyError as exc:
                 raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -622,7 +746,13 @@ def create_app(
         profile = _profile(connection_store, request.connection)
         try:
             parameters = _bound_parameters(
-                workspace_store, request.saved_query_id, request.sql, request.parameter_values
+                workspace_store,
+                request.saved_query_id,
+                request.sql,
+                request.parameter_values,
+                semantic_model_id=request.semantic_model_id,
+                semantic_plan=request.semantic_plan,
+                dialect=adapter_for(profile.url).dialect,
             )
         except (KeyError, ValueError) as exc:
             raise HTTPException(status_code=404 if isinstance(exc, KeyError) else 422, detail=str(exc)) from exc
@@ -744,6 +874,45 @@ def _profile(store: ConnectionStore, name: str) -> ConnectionProfile:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+def _generate_with_semantics(
+    profile: ConnectionProfile, request: GenerateRequest, workspace: WorkspaceStore
+) -> tuple[GeneratedQuery, dict[str, object]]:
+    models = workspace.semantic_models(profile.name)
+    model: SemanticModel | None
+    if request.semantic_model_id:
+        model = workspace.get_semantic_model(request.semantic_model_id)
+        if model.connection_hint != profile.name:
+            raise SemanticModelError("semantic model belongs to a different connection")
+    else:
+        model = models[0] if models else None
+    if model:
+        plan = resolve_question(model, request.question)
+        if plan:
+            compiled = compile_query(model, plan, adapter_for(profile.url).dialect)
+            return GeneratedQuery(request.question, compiled.sql, request.model), {
+                "generationMode": "semantic",
+                "modelId": model.id,
+                "plan": plan.payload(),
+                "trace": list(compiled.trace),
+            }
+    generated = QueryService(profile.url, request.model).generate(
+        request.question, request.tables, model.prompt_context() if model else None
+    )
+    return generated, {
+        "generationMode": "freeform",
+        "modelId": None,
+        "plan": None,
+        "trace": [],
+    }
+
+
+def _validate_semantic_model(store: ConnectionStore, model: SemanticModel) -> None:
+    profile = store.get(model.connection_hint)
+    details = adapter_for(profile.url).inspect_details()
+    schema = {table.name: {column.name for column in table.columns} for table in details.tables.values()}
+    validate_model(model, schema)
+
+
 def _validate_saved_query_contract(sql: str, parameters: object) -> None:
     if not isinstance(parameters, list) or not all(isinstance(parameter, dict) for parameter in parameters):
         raise ValueError("invalid saved query parameters")
@@ -762,8 +931,25 @@ def _validate_saved_query_contract(sql: str, parameters: object) -> None:
 
 
 def _bound_parameters(
-    workspace: WorkspaceStore, saved_query_id: str | None, sql: str, values: dict[str, object]
+    workspace: WorkspaceStore,
+    saved_query_id: str | None,
+    sql: str,
+    values: dict[str, object],
+    *,
+    semantic_model_id: str | None = None,
+    semantic_plan: dict[str, object] | None = None,
+    dialect: str = "sqlite",
 ) -> dict[str, object]:
+    if semantic_model_id or semantic_plan:
+        if not semantic_model_id or not semantic_plan:
+            raise ValueError("semantic execution requires both model and plan")
+        plan = _semantic_plan_from_payload(semantic_model_id, semantic_plan)
+        compiled = compile_query(workspace.get_semantic_model(semantic_model_id), plan, dialect)
+        if compiled.sql.strip() != sql.strip():
+            raise ValueError("semantic SQL was edited; regenerate it or clear the semantic plan")
+        if values:
+            raise ValueError("semantic filter values are defined by the semantic model")
+        return compiled.parameters
     if not detect_parameters(sql):
         if values:
             raise ValueError("parameter values supplied for SQL without parameters")
@@ -773,6 +959,29 @@ def _bound_parameters(
     saved = workspace.get_saved_query(saved_query_id)
     definitions = [ParameterDefinition.from_payload(parameter) for parameter in saved.parameters]
     return validate_and_bind(sql, definitions, values)
+
+
+def _semantic_plan_from_payload(model_id: str, payload: dict[str, object]) -> SemanticQueryPlan:
+    payload_model_id = payload.get("model_id")
+    if payload_model_id is not None and payload_model_id != model_id:
+        raise SemanticModelError("semantic plan references a different model")
+    metrics = payload.get("metrics")
+    dimensions = payload.get("dimensions", [])
+    filters = payload.get("filters", [])
+    if not isinstance(metrics, list) or not all(isinstance(item, str) for item in metrics):
+        raise SemanticModelError("semantic plan metrics must be a list of names")
+    if not isinstance(dimensions, list) or not all(isinstance(item, dict) for item in dimensions):
+        raise SemanticModelError("semantic plan dimensions must be a list of objects")
+    if filters:
+        raise SemanticModelError("runtime semantic filters are not supported in this compiler revision")
+    clean_dimensions: list[dict[str, str | None]] = []
+    for item in dimensions:
+        name = item.get("name")
+        grain = item.get("granularity")
+        if not isinstance(name, str) or (grain is not None and not isinstance(grain, str)):
+            raise SemanticModelError("invalid semantic dimension selection")
+        clean_dimensions.append({"name": name, "granularity": grain})
+    return SemanticQueryPlan(model_id, tuple(metrics), tuple(clean_dimensions))
 
 
 def _validate_database(value: str) -> tuple[str, int]:

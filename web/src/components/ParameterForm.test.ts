@@ -15,6 +15,7 @@ describe("ParameterForm", () => {
       generated_sql: "", edited_sql: "select :start_date, :secret", lifecycle_state: "draft",
       execution_status: null, duration_ms: null, row_count: null, error: null, result_reference: null,
       created_at: "", updated_at: "", saved_query_id: "saved", parameter_values: {},
+      semantic_model_id: null, semantic_plan: null,
     }];
     studio.activeDocumentId = "document";
     studio.savedQueries = [{

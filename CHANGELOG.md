@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.7.0] - 2026-08-02
+
+- Added a persistent Semantic Layer with schema-validated entities, business metrics, dimensions, default filters,
+  time grains, and cardinality-aware relationships.
+- Added deterministic SQLite and PostgreSQL compilers that translate semantic query plans into auditable SQL and
+  pass filter values through native driver binding.
+- Added semantic question resolution before free-form generation, business vocabulary context for the LLM fallback,
+  explicit generation modes, compilation traces, and protection against executing edited semantic SQL with a stale plan.
+- Added the Business Model editor in Studio, semantic-model selection per connection, SQL compilation previews,
+  persistent per-document plans, and workspace migration v4 to v5.
+- Added compiler, resolver, migration, API, store, UI, SQLite execution, and conditional PostgreSQL integration tests.
+
 ## [0.6.0] - 2026-08-02
 
 - Added typed parameters for saved queries, with native SQLite/PostgreSQL binding, server and client validation,
@@ -57,4 +69,5 @@ builds do not require those credentials.
 
 [0.3.0]: https://github.com/adabarbulescu/asksql/releases/tag/v0.3.0
 [0.6.0]: https://github.com/adabarbulescu/asksql/releases/tag/v0.6.0
+[0.7.0]: https://github.com/adabarbulescu/asksql/releases/tag/v0.7.0
 [0.2.0]: https://github.com/adabarbulescu/asksql/releases/tag/v0.2.0

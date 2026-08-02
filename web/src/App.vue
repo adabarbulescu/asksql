@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, watch } from "vue";
 
 import ConnectionDialog from "./components/ConnectionDialog.vue";
+import BusinessModelPanel from "./components/BusinessModelPanel.vue";
 import HistoryPanel from "./components/HistoryPanel.vue";
 import ModelDialog from "./components/ModelDialog.vue";
 import ParameterForm from "./components/ParameterForm.vue";
@@ -20,6 +21,7 @@ const sidebarTab = ref<"connections" | "history" | "library">("connections");
 const connectionDialog = ref(false);
 const editingConnection = ref<ConnectionProfile>();
 const modelDialog = ref(false);
+const businessModelDialog = ref(false);
 const deletingConnection = ref<ConnectionProfile>();
 const rowCount = computed(() => studio.execution?.result?.rows.length ?? 0);
 const savedForActive = computed(() => studio.savedQueries.find((item) => item.source_document_id === studio.activeDocumentId));
@@ -36,6 +38,12 @@ const sql = computed({
   set: (value: string) => {
     if (!studio.activeDocument) return;
     studio.activeDocument.edited_sql = value;
+    if (studio.activeDocument.semantic_plan && value !== studio.activeDocument.generated_sql) {
+      studio.activeDocument.semantic_plan = null;
+      studio.activeDocument.semantic_model_id = null;
+      studio.generationMode = "";
+      studio.semanticTrace = [];
+    }
     if (studio.activeDocument.lifecycle_state !== "running") studio.activeDocument.lifecycle_state = "draft";
   },
 });
@@ -157,6 +165,7 @@ async function useDemo() {
         <div class="panel-heading">
           <span>Schema</span>
           <div class="heading-actions" v-if="studio.selectedProfile">
+            <button title="Business model" @click="businessModelDialog = true">◇</button>
             <button title="Edit connection" @click="openEditConnection">✎</button>
             <button title="Remove connection" @click="deletingConnection = studio.selectedProfile">⌫</button>
             <button title="Refresh schema" @click="studio.selectConnection(studio.selectedConnection)">↻</button>
@@ -217,6 +226,14 @@ async function useDemo() {
             <span class="spark">✦</span>
             <div><strong>What do you want to learn from your data?</strong><small>Ask naturally. You will always review the SQL before it runs.</small></div>
           </div>
+          <div v-if="studio.semanticModels.length" class="semantic-context-bar">
+            <span>◇ Semantic model</span>
+            <select v-model="studio.selectedSemanticModelId">
+              <option value="">Disabled</option>
+              <option v-for="model in studio.semanticModels" :key="model.id" :value="model.id">{{ model.name }}</option>
+            </select>
+            <button @click="businessModelDialog = true">Edit model</button>
+          </div>
           <div class="question-box">
             <textarea
               v-model="question"
@@ -234,6 +251,11 @@ async function useDemo() {
             </div>
           </div>
           <div v-if="studio.error" class="error-banner"><span>!</span>{{ studio.error }}</div>
+          <div v-if="studio.generationMode" :class="['generation-mode', studio.generationMode]">
+            <strong>{{ studio.generationMode === 'semantic' ? '◇ Semantic compilation' : '✦ Free-form SQL' }}</strong>
+            <span v-if="studio.generationMode === 'semantic'">Resolved through {{ studio.semanticTrace.length }} audited definitions.</span>
+            <span v-else>No exact semantic metric matched; the model received the business vocabulary as context.</span>
+          </div>
         </div>
 
         <section class="query-panel">
@@ -276,6 +298,12 @@ async function useDemo() {
           </div>
           <ResultsGrid v-if="activeTab === 'results'" :execution="studio.execution" :loading="studio.activity === 'execute'" />
           <div v-else class="messages-view">
+            <template v-if="studio.semanticTrace.length">
+              <strong>Semantic plan</strong>
+              <div v-for="item in studio.semanticTrace" :key="`${item.kind}-${item.name}`" class="semantic-trace-row">
+                <span>{{ item.kind }}</span><strong>{{ item.name }}</strong><code>{{ item.sql }}</code>
+              </div>
+            </template>
             <template v-if="studio.queryPlan">
               <strong>Query plan</strong>
               <div v-for="(row, index) in studio.queryPlan.rows" :key="index" class="plan-row">{{ row.join(' · ') }}</div>
@@ -293,6 +321,7 @@ async function useDemo() {
       @saved="connectionDialog = false"
     />
     <ModelDialog v-if="modelDialog" @close="modelDialog = false" />
+    <BusinessModelPanel v-if="businessModelDialog" @close="businessModelDialog = false" />
     <WriteReviewDialog v-if="studio.writeReview" />
     <div v-if="deletingConnection" class="modal-backdrop" @mousedown.self="deletingConnection = undefined">
       <section class="dialog confirm-dialog" role="alertdialog" aria-modal="true">

@@ -68,6 +68,10 @@ The Saved Queries Library captures deliberate reusable snapshots independently f
 history, with folders, tags, favorites, search, duplication, Save as, and opening into a fresh tab. The
 library supports typed `:name` parameters and generates per-tab input forms. Values are passed separately through
 native SQLite or PostgreSQL driver binding; parameters marked sensitive are never written to `workspace.db`. The
+Business Model editor defines schema-validated entities, metrics, dimensions, default filters, time grains, and
+relationships. Questions that name these objects are resolved into an explicit semantic plan and compiled
+deterministically for SQLite or PostgreSQL; Studio displays the definitions and joins used to produce the SQL.
+Unmatched questions retain free-form generation while receiving the model's business vocabulary as context. The
 database stays on your machine; model providers receive schema and the question, never result rows.
 
 No terminal setup is required after launch. Studio can register, validate, rename, and remove SQLite or PostgreSQL

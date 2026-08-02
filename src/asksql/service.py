@@ -25,8 +25,13 @@ class QueryService:
         self.model = model
         self.adapter = adapter_for(db_url)
 
-    def generate(self, question: str, tables: list[str] | None = None) -> GeneratedQuery:
-        sql = generate_sql(self.model, self.adapter.schema(tables), question, self.adapter.dialect)
+    def generate(
+        self, question: str, tables: list[str] | None = None, semantic_context: str | None = None
+    ) -> GeneratedQuery:
+        schema = self.adapter.schema(tables)
+        if semantic_context:
+            schema = f"{schema}\n\n{semantic_context}"
+        sql = generate_sql(self.model, schema, question, self.adapter.dialect)
         return GeneratedQuery(question, sql, self.model)
 
     def execute(
