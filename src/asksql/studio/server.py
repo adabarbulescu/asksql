@@ -37,6 +37,7 @@ class GenerateRequest(BaseModel):
     question: str = Field(min_length=1, max_length=10_000)
     model: str = Field(default=DEFAULT_MODEL, min_length=1, max_length=200)
     tables: list[str] | None = Field(default=None, max_length=200)
+    document_id: str | None = Field(default=None, max_length=64)
 
 
 class ExecuteRequest(BaseModel):
@@ -48,6 +49,32 @@ class ExecuteRequest(BaseModel):
     question: str | None = Field(default=None, max_length=10_000)
     model: str | None = Field(default=None, max_length=200)
     source: str = Field(default="manual", pattern="^(manual|ai)$")
+    document_id: str | None = Field(default=None, max_length=64)
+
+
+class DocumentCreateRequest(BaseModel):
+    connection: str = Field(min_length=1, max_length=100)
+    title: str = Field(default="Untitled query", min_length=1, max_length=200)
+    question: str = Field(default="", max_length=10_000)
+    edited_sql: str = Field(default="select 1 as ready", max_length=100_000)
+    selected_tables: list[str] = Field(default_factory=list, max_length=200)
+
+
+class DocumentUpdateRequest(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    connection: str | None = Field(default=None, min_length=1, max_length=100)
+    selected_tables: list[str] | None = Field(default=None, max_length=200)
+    question: str | None = Field(default=None, max_length=10_000)
+    generated_sql: str | None = Field(default=None, max_length=100_000)
+    edited_sql: str | None = Field(default=None, max_length=100_000)
+    lifecycle_state: str | None = Field(
+        default=None, pattern="^(draft|generated|running|completed|failed|cancelled)$"
+    )
+
+
+class WorkspaceUpdateRequest(BaseModel):
+    active_connection: str | None = Field(default=None, max_length=100)
+    active_document_id: str | None = Field(default=None, max_length=64)
 
 
 class ConnectionRequest(BaseModel):
@@ -125,6 +152,55 @@ def create_app(
         model: Annotated[str, Query(min_length=1, max_length=200)] = DEFAULT_MODEL,
     ) -> dict[str, Any]:
         return diagnostics(store=connection_store, model=model)
+
+    @app.get("/api/workspace")
+    def get_workspace() -> dict[str, object]:
+        return workspace_store.workspace()
+
+    @app.patch("/api/workspace")
+    def update_workspace(request: WorkspaceUpdateRequest) -> dict[str, object]:
+        try:
+            return workspace_store.update_workspace(
+                active_connection=request.active_connection, active_document_id=request.active_document_id
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/api/workspace/documents", status_code=201)
+    def create_document(request: DocumentCreateRequest) -> dict[str, object]:
+        _profile(connection_store, request.connection)
+        try:
+            return workspace_store.create_document(
+                request.connection,
+                title=request.title,
+                question=request.question,
+                edited_sql=request.edited_sql,
+                selected_tables=request.selected_tables,
+            ).payload()
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.patch("/api/workspace/documents/{identifier}")
+    def update_document(
+        identifier: Annotated[str, ApiPath(min_length=1)], request: DocumentUpdateRequest
+    ) -> dict[str, object]:
+        changes = request.model_dump(exclude_none=True)
+        if request.connection is not None:
+            _profile(connection_store, request.connection)
+        try:
+            return workspace_store.update_document(identifier, **changes).payload()
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.delete("/api/workspace/documents/{identifier}", status_code=204)
+    def delete_document(identifier: Annotated[str, ApiPath(min_length=1)]) -> Response:
+        try:
+            workspace_store.delete_document(identifier)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return Response(status_code=204)
 
     @app.get("/api/connections")
     def connections() -> dict[str, list[dict[str, str]]]:
@@ -250,6 +326,19 @@ def create_app(
         history = workspace_store.create_generated(
             request.connection, generated.question, generated.sql, generated.model
         )
+        if request.document_id:
+            try:
+                workspace_store.update_document(
+                    request.document_id,
+                    connection=request.connection,
+                    selected_tables=request.tables or [],
+                    question=generated.question,
+                    generated_sql=generated.sql,
+                    edited_sql=generated.sql,
+                    lifecycle_state="generated",
+                )
+            except KeyError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
         return {
             "question": generated.question,
             "sql": generated.sql,
@@ -268,6 +357,16 @@ def create_app(
                 history = workspace_store.create_generated(
                     request.connection, generated.question, generated.sql, generated.model
                 )
+                if request.document_id:
+                    workspace_store.update_document(
+                        request.document_id,
+                        connection=request.connection,
+                        selected_tables=request.tables or [],
+                        question=generated.question,
+                        generated_sql=generated.sql,
+                        edited_sql=generated.sql,
+                        lifecycle_state="generated",
+                    )
                 yield (
                     json.dumps(
                         {
@@ -335,9 +434,24 @@ def create_app(
                 question=request.question,
                 model=request.model,
             ).id
+        if request.document_id:
+            try:
+                workspace_store.update_document(
+                    request.document_id,
+                    connection=request.connection,
+                    question=request.question or "",
+                    edited_sql=request.sql,
+                    lifecycle_state="running",
+                    execution_status=None,
+                    error=None,
+                )
+            except KeyError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
 
         def record_completion(execution: QueryExecution) -> None:
             workspace_store.complete(history_id, execution)
+            if request.document_id:
+                workspace_store.complete_document(request.document_id, execution, history_id)
 
         job = execution_manager.start(
             QueryService(profile.url),

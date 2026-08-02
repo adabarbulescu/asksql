@@ -44,6 +44,32 @@ export interface HistoryEntry {
   pinned: boolean;
 }
 
+export type QueryDocumentState = "draft" | "generated" | "running" | "completed" | "failed" | "cancelled";
+
+export interface QueryDocument {
+  id: string;
+  title: string;
+  connection: string;
+  selected_tables: string[];
+  question: string;
+  generated_sql: string;
+  edited_sql: string;
+  lifecycle_state: QueryDocumentState;
+  execution_status: QueryExecution["status"] | null;
+  duration_ms: number | null;
+  row_count: number | null;
+  error: string | null;
+  result_reference: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WorkspaceSnapshot {
+  activeConnection: string | null;
+  activeDocumentId: string | null;
+  documents: QueryDocument[];
+}
+
 export interface Column {
   name: string;
   type: string;

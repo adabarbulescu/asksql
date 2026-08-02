@@ -174,6 +174,57 @@ class StudioApiTest(unittest.TestCase):
         self.assertTrue(pinned["pinned"])
         self.assertEqual(deleted.status_code, 204)
 
+    def test_persistent_query_document_api(self) -> None:
+        created = self.client.post(
+            "/api/workspace/documents",
+            json={"connection": "local", "title": "Revenue analysis", "selected_tables": ["projects"]},
+        )
+        identifier = created.json()["id"]
+        updated = self.client.patch(
+            f"/api/workspace/documents/{identifier}",
+            json={
+                "question": "show projects",
+                "generated_sql": "select * from projects",
+                "edited_sql": "select name from projects",
+                "lifecycle_state": "generated",
+            },
+        )
+        workspace = self.client.patch(
+            "/api/workspace", json={"active_connection": "local", "active_document_id": identifier}
+        )
+
+        self.assertEqual(created.status_code, 201)
+        self.assertEqual(updated.json()["edited_sql"], "select name from projects")
+        self.assertEqual(workspace.json()["activeDocumentId"], identifier)
+        self.assertEqual(self.client.get("/api/workspace").json()["documents"][0]["title"], "Revenue analysis")
+
+    def test_async_execution_updates_query_document_lifecycle(self) -> None:
+        document = self.client.post(
+            "/api/workspace/documents", json={"connection": "local", "title": "Projects"}
+        ).json()
+        started = self.client.post(
+            "/api/query/jobs",
+            json={
+                "connection": "local",
+                "sql": "select name from projects",
+                "document_id": document["id"],
+            },
+        ).json()
+
+        import time
+
+        job = self.client.get(f"/api/query/jobs/{started['jobId']}").json()
+        for _ in range(100):
+            if job["state"] == "completed":
+                break
+            time.sleep(0.01)
+            job = self.client.get(f"/api/query/jobs/{started['jobId']}").json()
+        restored = self.client.get("/api/workspace").json()["documents"][0]
+
+        self.assertEqual(restored["lifecycle_state"], "completed")
+        self.assertEqual(restored["execution_status"], "succeeded")
+        self.assertEqual(restored["result_reference"], started["historyId"])
+
     def test_unknown_connection_is_not_found(self) -> None:
         response = self.client.get("/api/connections/missing/schema")
 

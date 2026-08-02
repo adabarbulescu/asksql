@@ -19,12 +19,34 @@ const editingConnection = ref<ConnectionProfile>();
 const modelDialog = ref(false);
 const deletingConnection = ref<ConnectionProfile>();
 const rowCount = computed(() => studio.execution?.result?.rows.length ?? 0);
+const question = computed({
+  get: () => studio.activeDocument?.question ?? "",
+  set: (value: string) => {
+    if (!studio.activeDocument) return;
+    studio.activeDocument.question = value;
+    if (studio.activeDocument.lifecycle_state !== "running") studio.activeDocument.lifecycle_state = "draft";
+  },
+});
+const sql = computed({
+  get: () => studio.activeDocument?.edited_sql ?? "",
+  set: (value: string) => {
+    if (!studio.activeDocument) return;
+    studio.activeDocument.edited_sql = value;
+    if (studio.activeDocument.lifecycle_state !== "running") studio.activeDocument.lifecycle_state = "draft";
+  },
+});
 
 onMounted(() => studio.initialise());
 watch(
-  () => [studio.selectedConnection, studio.question, studio.sql],
+  () => [studio.selectedConnection, question.value, sql.value, studio.selectedTables],
   () => studio.persistDraft(),
+  { deep: true },
 );
+
+async function renameDocument(identifier: string, current: string) {
+  const title = window.prompt("Query name", current)?.trim();
+  if (title && title !== current) await studio.renameDocument(identifier, title);
+}
 
 function openAddConnection() {
   editingConnection.value = undefined;
@@ -141,6 +163,21 @@ async function useDemo() {
       </section>
 
       <section v-else class="main-panel">
+        <nav class="query-tabs" aria-label="Open queries">
+          <button
+            v-for="document in studio.documents"
+            :key="document.id"
+            :class="['query-tab', { active: document.id === studio.activeDocumentId }]"
+            @click="studio.activateDocument(document.id)"
+            @dblclick="renameDocument(document.id, document.title)"
+          >
+            <span :class="['document-state', document.lifecycle_state]" />
+            <span class="query-tab-title">{{ document.title }}</span>
+            <small>{{ document.connection }}</small>
+            <i title="Close query" @click.stop="studio.closeDocument(document.id)">×</i>
+          </button>
+          <button class="new-query-tab" title="New query" @click="studio.newDocument">＋</button>
+        </nav>
         <div class="conversation">
           <div class="welcome-copy">
             <span class="spark">✦</span>
@@ -148,7 +185,7 @@ async function useDemo() {
           </div>
           <div class="question-box">
             <textarea
-              v-model="studio.question"
+              v-model="question"
               rows="2"
               :disabled="!studio.selectedConnection"
               placeholder="Which customers generated the most revenue last month?"
@@ -156,7 +193,7 @@ async function useDemo() {
             />
             <div class="question-actions">
               <span>Ctrl ↵ to generate</span>
-              <button :disabled="studio.busy || !studio.question.trim() || !studio.selectedConnection" @click="studio.generate">
+              <button :disabled="studio.busy || !question.trim() || !studio.selectedConnection" @click="studio.generate">
                 <span v-if="studio.activity === 'generate'" class="spinner" />
                 <span v-else>✦</span> Generate SQL
               </button>
@@ -167,17 +204,17 @@ async function useDemo() {
 
         <section class="query-panel">
           <div class="query-heading">
-            <div><span class="status-dot" /><strong>SQL review</strong><small>Read-only execution</small></div>
-            <button v-if="!studio.activeJobId" class="write-button" :disabled="studio.busy || !studio.selectedConnection || !studio.sql.trim()" @click="studio.prepareWrite">Review write</button>
+            <div><span :class="['status-dot', studio.activeDocument?.lifecycle_state]" /><strong>SQL review</strong><small>{{ studio.activeDocument?.lifecycle_state }} · Read-only execution</small></div>
+            <button v-if="!studio.activeJobId" class="write-button" :disabled="studio.busy || !studio.selectedConnection || !sql.trim()" @click="studio.prepareWrite">Review write</button>
             <button v-if="studio.activeJobId" class="cancel-button" @click="studio.cancelExecution">
               ■ Cancel
             </button>
-            <button v-else class="run-button" :disabled="studio.busy || !studio.selectedConnection || !studio.sql.trim()" @click="studio.execute">
+            <button v-else class="run-button" :disabled="studio.busy || !studio.selectedConnection || !sql.trim()" @click="studio.execute">
               <span v-if="studio.activity === 'execute'" class="spinner dark" />
               <span v-else>▶</span> Run query
             </button>
           </div>
-          <SqlEditor v-model="studio.sql" />
+          <SqlEditor v-model="sql" />
         </section>
 
         <section class="results-panel">
@@ -194,6 +231,11 @@ async function useDemo() {
                 <button title="Export JSON" @click="studio.exportResults('json')">JSON</button>
                 <button title="Export Markdown" @click="studio.exportResults('markdown')">MD</button>
               </span>
+            </div>
+            <div v-else-if="studio.activeDocument?.execution_status" class="execution-meta">
+              <span :class="studio.activeDocument.execution_status">{{ studio.activeDocument.execution_status }}</span>
+              <template v-if="studio.activeDocument.duration_ms !== null">{{ studio.activeDocument.duration_ms.toFixed(1) }} ms</template>
+              <template v-if="studio.activeDocument.row_count !== null"> · {{ studio.activeDocument.row_count }} rows</template>
             </div>
           </div>
           <ResultsGrid v-if="activeTab === 'results'" :execution="studio.execution" :loading="studio.activity === 'execute'" />

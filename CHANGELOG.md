@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented in this file.
 
+## Unreleased
+
+- Added a persistent multi-query Studio workspace with reopenable, renameable tabs and per-document connection,
+  schema context, natural-language question, generated SQL, edited SQL, execution metadata, and result references.
+- Added explicit draft, generated, running, completed, failed, and cancelled document lifecycles, including recovery
+  of an interrupted running query after Studio restarts.
+
 ## [0.3.0] - 2026-07-19
 
 - Added AskSQL Studio query history, pinning, search, restore, and local private workspace storage.

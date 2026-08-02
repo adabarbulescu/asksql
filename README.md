@@ -60,9 +60,10 @@ Launch AskSQL Studio, the local-first browser workspace:
 asksql ui
 ```
 
-Studio opens on `127.0.0.1` and uses your saved connections. It includes connection management, persistent query
-history, schema search and context selection, natural-language SQL generation, editable SQL review, cancellable
-execution, safe write confirmation, exports, query plans, and a virtualized results grid. The
+Studio opens on `127.0.0.1` and uses your saved connections. Its persistent multi-query workspace restores open
+tabs after restart and preserves each query's connection, schema context, question, generated and edited SQL,
+execution lifecycle, metadata, and result reference. Studio also includes searchable query history, natural-language
+SQL generation, cancellable execution, safe write confirmation, exports, query plans, and a virtualized results grid. The
 database stays on your machine; model providers receive schema and the question, never result rows.
 
 No terminal setup is required after launch. Studio can register, validate, rename, and remove SQLite or PostgreSQL

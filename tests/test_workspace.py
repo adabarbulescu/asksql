@@ -41,6 +41,52 @@ class WorkspaceStoreTest(unittest.TestCase):
         self.assertEqual(self.store.clear("one"), 1)
         self.assertEqual(self.store.entries(), [])
 
+    def test_persists_multiple_query_documents_and_active_session(self) -> None:
+        first = self.store.create_document(
+            "one", title="Revenue", question="monthly revenue", selected_tables=["orders"]
+        )
+        second = self.store.create_document("two", title="Customers")
+        self.store.update_document(
+            first.id,
+            generated_sql="select sum(total) from orders",
+            edited_sql="select sum(total) as revenue from orders",
+            lifecycle_state="generated",
+        )
+        self.store.update_workspace(active_connection="one", active_document_id=first.id)
+
+        reopened = WorkspaceStore(self.store.path).workspace()
+
+        self.assertEqual(reopened["activeDocumentId"], first.id)
+        self.assertEqual(len(reopened["documents"]), 2)
+        self.assertEqual(reopened["documents"][0]["selected_tables"], ["orders"])
+        self.assertEqual(reopened["documents"][0]["lifecycle_state"], "generated")
+        self.assertEqual(reopened["documents"][1]["id"], second.id)
+
+    def test_recovers_interrupted_running_document_as_cancelled(self) -> None:
+        document = self.store.create_document("one")
+        self.store.update_document(document.id, lifecycle_state="running")
+
+        reopened = WorkspaceStore(self.store.path).get_document(document.id)
+
+        self.assertEqual(reopened.lifecycle_state, "cancelled")
+        self.assertEqual(reopened.execution_status, "cancelled")
+
+    def test_completes_document_with_result_reference(self) -> None:
+        document = self.store.create_document("one")
+        execution = QueryExecution(
+            "select 1",
+            QueryResult(["value"], [(1,)], False, 200),
+            4.2,
+            ExecutionStatus.SUCCEEDED,
+            None,
+        )
+
+        completed = self.store.complete_document(document.id, execution, "history-1")
+
+        self.assertEqual(completed.lifecycle_state, "completed")
+        self.assertEqual(completed.result_reference, "history-1")
+        self.assertEqual(completed.row_count, 1)
+
     def test_backs_up_existing_unversioned_workspace_before_adopting_it(self) -> None:
         path = Path(self.directory.name) / "old-workspace.db"
         with sqlite3.connect(path) as connection:

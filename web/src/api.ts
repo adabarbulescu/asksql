@@ -5,10 +5,44 @@ import type {
   HistoryEntry,
   ModelStatus,
   QueryExecution,
+  QueryDocument,
+  WorkspaceSnapshot,
   SchemaDetails,
   SetupStatus,
   WriteReview,
 } from "./types";
+
+export function fetchWorkspace(): Promise<WorkspaceSnapshot> {
+  return request<WorkspaceSnapshot>("/api/workspace");
+}
+
+export function setWorkspaceActive(activeConnection: string, activeDocumentId: string): Promise<WorkspaceSnapshot> {
+  return request<WorkspaceSnapshot>("/api/workspace", {
+    method: "PATCH",
+    body: JSON.stringify({ active_connection: activeConnection, active_document_id: activeDocumentId }),
+  });
+}
+
+export function createQueryDocument(connection: string, title = "Untitled query"): Promise<QueryDocument> {
+  return request<QueryDocument>("/api/workspace/documents", {
+    method: "POST",
+    body: JSON.stringify({ connection, title }),
+  });
+}
+
+export function updateQueryDocument(
+  identifier: string,
+  changes: Partial<Pick<QueryDocument, "title" | "connection" | "selected_tables" | "question" | "generated_sql" | "edited_sql" | "lifecycle_state">>,
+): Promise<QueryDocument> {
+  return request<QueryDocument>(`/api/workspace/documents/${encodeURIComponent(identifier)}`, {
+    method: "PATCH",
+    body: JSON.stringify(changes),
+  });
+}
+
+export function deleteQueryDocument(identifier: string): Promise<void> {
+  return request<void>(`/api/workspace/documents/${encodeURIComponent(identifier)}`, { method: "DELETE" });
+}
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(path, {
@@ -130,11 +164,12 @@ export async function generateSqlStream(
   model: string,
   onEvent?: (event: Record<string, unknown>) => void,
   tables?: string[],
+  documentId?: string,
 ): Promise<{ sql: string; historyId: string }> {
   const response = await fetch("/api/query/generate-stream", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ connection, question, model, tables }),
+    body: JSON.stringify({ connection, question, model, tables, document_id: documentId }),
   });
   if (!response.ok || !response.body) {
     throw new Error(`SQL generation failed (${response.status})`);
@@ -166,7 +201,7 @@ export async function generateSqlStream(
 export function startExecution(
   connection: string,
   sql: string,
-  metadata: { historyId?: string; question?: string; model?: string; source?: "ai" | "manual" } = {},
+  metadata: { historyId?: string; question?: string; model?: string; source?: "ai" | "manual"; documentId?: string } = {},
 ): Promise<ExecutionJob> {
   return request<ExecutionJob>("/api/query/jobs", {
     method: "POST",
@@ -177,6 +212,7 @@ export function startExecution(
       question: metadata.question,
       model: metadata.model,
       source: metadata.source ?? "manual",
+      document_id: metadata.documentId,
     }),
   });
 }
