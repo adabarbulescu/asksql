@@ -4,6 +4,7 @@ import base64
 import json
 import threading
 import webbrowser
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any, Iterator
 
@@ -16,6 +17,13 @@ from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from asksql.adapters import adapter_for
+from asksql.analysis import (
+    AnalysisError,
+    definition_from_payload,
+    report_as_html,
+    report_as_pdf,
+    revenue_investigation_definition,
+)
 from asksql.connections import ConnectionStore, ConnectionStoreError, normalize_database_url
 from asksql.demo import create_demo_db
 from asksql.diagnostics import diagnostics
@@ -45,6 +53,7 @@ from asksql.semantic import (
 from asksql.service import QueryService
 from asksql.setup import DEFAULT_MODEL, setup_status
 from asksql.sqlite import DEFAULT_LIMIT, DEFAULT_TIMEOUT, MAX_LIMIT, inspect
+from asksql.studio.analysis_jobs import AnalysisManager
 from asksql.studio.jobs import ExecutionManager
 from asksql.studio.writes import WriteIntentError, WriteIntentManager
 from asksql.workspace import WorkspaceStore
@@ -115,6 +124,32 @@ class SemanticCompileRequest(BaseModel):
     connection: str = Field(min_length=1, max_length=100)
     metrics: list[str] = Field(min_length=1, max_length=50)
     dimensions: list[dict[str, str | None]] = Field(default_factory=list, max_length=50)
+
+
+class AnalysisDefinitionRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=2_000)
+    template: str = Field(min_length=1, max_length=100)
+    goal: str = Field(min_length=1, max_length=2_000)
+    semantic_model_id: str = Field(min_length=1, max_length=64)
+    inputs: list[dict[str, object]] = Field(default_factory=list, max_length=100)
+    steps: list[dict[str, object]] = Field(min_length=1, max_length=100)
+    outputs: list[str] = Field(default_factory=list, max_length=100)
+
+
+class AnalysisTemplateRequest(BaseModel):
+    semantic_model_id: str = Field(min_length=1, max_length=64)
+    template: str = Field(default="revenue_investigation", pattern="^revenue_investigation$")
+
+
+class AnalysisRunRequest(BaseModel):
+    definition_id: str = Field(min_length=1, max_length=64)
+    input_values: dict[str, object]
+    parent_run_id: str | None = Field(default=None, max_length=64)
+
+
+class AnalysisFollowUpRequest(BaseModel):
+    finding_id: str = Field(min_length=1, max_length=200)
 
 
 class SavedQueryParameterRequest(BaseModel):
@@ -215,15 +250,17 @@ def create_app(
     store: ConnectionStore | None = None,
     workspace: WorkspaceStore | None = None,
     jobs: ExecutionManager | None = None,
+    analyses: AnalysisManager | None = None,
     writes: WriteIntentManager | None = None,
     static_dir: Path | None = None,
 ) -> FastAPI:
     connection_store = store or ConnectionStore()
     workspace_store = workspace or WorkspaceStore()
     execution_manager = jobs or ExecutionManager()
+    analysis_manager = analyses or AnalysisManager()
     write_intents = writes or WriteIntentManager()
     assets = static_dir or Path(__file__).with_name("static")
-    app = FastAPI(title="AskSQL Studio", version="0.7.0", docs_url=None, redoc_url=None)
+    app = FastAPI(title="AskSQL Studio", version="0.8.0", docs_url=None, redoc_url=None)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "testserver"])
 
     @app.get("/api/health")
@@ -424,6 +461,213 @@ def create_app(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except SemanticModelError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/api/analysis-templates")
+    def analysis_templates(
+        semantic_model_id: Annotated[str, Query(min_length=1, max_length=64)],
+    ) -> dict[str, object]:
+        try:
+            model = workspace_store.get_semantic_model(semantic_model_id)
+            definition = revenue_investigation_definition(model)
+            return {
+                "templates": [
+                    {
+                        "id": "revenue_investigation",
+                        "name": definition.name,
+                        "description": definition.description,
+                        "goal": definition.goal,
+                        "available": True,
+                        "estimated_queries": _estimated_analysis_queries(definition.steps),
+                    }
+                ]
+            }
+        except (KeyError, AnalysisError) as exc:
+            return {
+                "templates": [
+                    {
+                        "id": "revenue_investigation",
+                        "name": "Revenue Investigation",
+                        "description": "Explain revenue change through measurable drivers.",
+                        "goal": "Explain why revenue changed between two comparable periods.",
+                        "available": False,
+                        "unavailable_reason": str(exc),
+                        "estimated_queries": 0,
+                    }
+                ]
+            }
+
+    @app.get("/api/analysis-definitions")
+    def list_analysis_definitions(
+        semantic_model_id: Annotated[str | None, Query(max_length=64)] = None,
+    ) -> dict[str, object]:
+        return {
+            "analysisDefinitions": [item.payload() for item in workspace_store.analysis_definitions(semantic_model_id)]
+        }
+
+    @app.post("/api/analysis-definitions", status_code=201)
+    def create_analysis_definition(request: AnalysisDefinitionRequest) -> dict[str, object]:
+        try:
+            payload = request.model_dump()
+            definition_from_payload(payload)
+            return workspace_store.create_analysis_definition(payload).payload()
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except AnalysisError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/analysis-definitions/from-template", status_code=201)
+    def create_analysis_from_template(request: AnalysisTemplateRequest) -> dict[str, object]:
+        try:
+            if request.template != "revenue_investigation":
+                raise AnalysisError(f"unknown analysis template: {request.template}")
+            model = workspace_store.get_semantic_model(request.semantic_model_id)
+            definition = revenue_investigation_definition(model)
+            return workspace_store.create_analysis_definition(_definition_create_payload(definition)).payload()
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except AnalysisError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/api/analysis-definitions/{identifier}")
+    def get_analysis_definition(identifier: Annotated[str, ApiPath(min_length=1)]) -> dict[str, object]:
+        try:
+            return workspace_store.get_analysis_definition(identifier).payload()
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.put("/api/analysis-definitions/{identifier}")
+    def update_analysis_definition(
+        identifier: Annotated[str, ApiPath(min_length=1)], request: AnalysisDefinitionRequest
+    ) -> dict[str, object]:
+        try:
+            return workspace_store.update_analysis_definition(identifier, request.model_dump()).payload()
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except AnalysisError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.delete("/api/analysis-definitions/{identifier}", status_code=204)
+    def delete_analysis_definition(identifier: Annotated[str, ApiPath(min_length=1)]) -> Response:
+        try:
+            workspace_store.delete_analysis_definition(identifier)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return Response(status_code=204)
+
+    @app.get("/api/analysis-runs")
+    def list_analysis_runs(limit: Annotated[int, Query(ge=1, le=500)] = 100) -> dict[str, object]:
+        return {"analysisRuns": [item.payload() for item in workspace_store.analysis_runs(limit)]}
+
+    @app.post("/api/analysis-runs", status_code=202)
+    def start_analysis_run(request: AnalysisRunRequest) -> dict[str, object]:
+        try:
+            definition = workspace_store.get_analysis_definition(request.definition_id)
+            model = workspace_store.get_semantic_model(definition.semantic_model_id)
+            profile = _profile(connection_store, model.connection_hint)
+            if request.parent_run_id:
+                workspace_store.get_analysis_run(request.parent_run_id)
+            run = workspace_store.create_analysis_run(
+                definition,
+                model.payload(),
+                request.input_values,
+                parent_run_id=request.parent_run_id,
+            )
+
+            def progress(steps: list[dict[str, object]], evidence: list[dict[str, object]]) -> None:
+                workspace_store.update_analysis_run(run.id, state="running", steps=steps, evidence=evidence)
+
+            def completed(result: dict[str, object]) -> None:
+                workspace_store.update_analysis_run(
+                    run.id,
+                    **result,
+                    error=None,
+                    completed_at=_now(),
+                )
+
+            def failed(exc: Exception) -> None:
+                workspace_store.update_analysis_run(run.id, state="failed", error=str(exc), completed_at=_now())
+
+            analysis_manager.start(
+                run.id,
+                QueryService(profile.url),
+                definition,
+                model,
+                request.input_values,
+                progress=progress,
+                completed=completed,
+                failed=failed,
+            )
+            return workspace_store.get_analysis_run(run.id).payload()
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (AnalysisError, SemanticModelError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/api/analysis-runs/{identifier}")
+    def get_analysis_run(identifier: Annotated[str, ApiPath(min_length=1)]) -> dict[str, object]:
+        try:
+            return workspace_store.get_analysis_run(identifier).payload()
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.delete("/api/analysis-runs/{identifier}", status_code=202)
+    def cancel_analysis_run(identifier: Annotated[str, ApiPath(min_length=1)]) -> dict[str, object]:
+        try:
+            run = workspace_store.get_analysis_run(identifier)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if run.state not in {"planning", "running"} or not analysis_manager.cancel(identifier):
+            raise HTTPException(status_code=409, detail="analysis run is not active")
+        return run.payload()
+
+    @app.post("/api/analysis-runs/{identifier}/follow-up", status_code=202)
+    def follow_up_analysis(
+        identifier: Annotated[str, ApiPath(min_length=1)], request: AnalysisFollowUpRequest
+    ) -> dict[str, object]:
+        try:
+            parent = workspace_store.get_analysis_run(identifier)
+            finding = next(item for item in parent.findings if item.get("id") == request.finding_id)
+            follow_up = finding.get("follow_up_analysis")
+            if not isinstance(follow_up, dict):
+                raise AnalysisError("finding does not define a follow-up analysis")
+            inputs = dict(parent.input_values)
+            inputs["scope_filters"] = follow_up.get("scope_filters", [])
+            return start_analysis_run(
+                AnalysisRunRequest(
+                    definition_id=parent.definition_id,
+                    input_values=inputs,
+                    parent_run_id=parent.id,
+                )
+            )
+        except StopIteration as exc:
+            raise HTTPException(status_code=404, detail="unknown analysis finding") from exc
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except AnalysisError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/api/analysis-runs/{identifier}/export")
+    def export_analysis_run(
+        identifier: Annotated[str, ApiPath(min_length=1)],
+        format: Annotated[str, Query(pattern="^(html|pdf)$")] = "pdf",
+    ) -> Response:
+        try:
+            run = workspace_store.get_analysis_run(identifier).payload()
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if run["state"] not in {"completed", "partially_completed"}:
+            raise HTTPException(status_code=409, detail="analysis report is not complete")
+        if format == "html":
+            return Response(
+                report_as_html(run),
+                media_type="text/html",
+                headers={"Content-Disposition": f'attachment; filename="asksql-analysis-{identifier}.html"'},
+            )
+        return Response(
+            report_as_pdf(run),
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="asksql-analysis-{identifier}.pdf"'},
+        )
 
     @app.get("/api/connections")
     def connections() -> dict[str, list[dict[str, str]]]:
@@ -872,6 +1116,34 @@ def _profile(store: ConnectionStore, name: str) -> ConnectionProfile:
         return store.get(name)
     except ConnectionStoreError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+def _definition_create_payload(definition: Any) -> dict[str, object]:
+    payload = definition.payload()
+    for key in ("id", "created_at", "updated_at"):
+        payload.pop(key, None)
+    return payload
+
+
+def _estimated_analysis_queries(steps: tuple[dict[str, object], ...]) -> int:
+    weights = {
+        "period_comparison": 2,
+        "trend": 1,
+        "metric_decomposition": 2,
+        "dimensional_contribution": 2,
+    }
+    total = 0
+    for step in steps:
+        components = step.get("components", [])
+        multiplier = (
+            len(components) if step.get("type") == "metric_decomposition" and isinstance(components, list) else 1
+        )
+        total += weights.get(str(step.get("type")), 1) * max(multiplier, 1)
+    return total
+
+
+def _now() -> str:
+    return datetime.now(UTC).isoformat()
 
 
 def _generate_with_semantics(

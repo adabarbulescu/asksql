@@ -245,8 +245,19 @@ def compile_query(model: SemanticModel, plan: SemanticQueryPlan, dialect: str) -
     selected_dimensions = [
         (_lookup(dimensions, str(item.get("name")), "dimension"), item.get("granularity")) for item in plan.dimensions
     ]
+    query_filters: list[tuple[SemanticDimension, str, object]] = []
+    for item in plan.filters:
+        dimension = _lookup(dimensions, str(item.get("dimension")), "filter dimension")
+        operator = str(item.get("operator", "eq"))
+        if operator not in FILTER_OPERATORS:
+            raise SemanticModelError(f"invalid query filter operator: {operator}")
+        query_filters.append((dimension, operator, item.get("value")))
     root = selected_metrics[0].entity
-    required_entities = {item.entity for item in selected_metrics} | {item.entity for item, _ in selected_dimensions}
+    required_entities = (
+        {item.entity for item in selected_metrics}
+        | {item.entity for item, _ in selected_dimensions}
+        | {item.entity for item, _, _ in query_filters}
+    )
     joins = _join_paths(model, root, required_entities)
     ordered_entities = [root]
     for _, left, right in joins:
@@ -282,6 +293,14 @@ def compile_query(model: SemanticModel, plan: SemanticQueryPlan, dialect: str) -
                 )
             )
             parameters[parameter] = item.value
+    for filter_index, (dimension, operator, value) in enumerate(query_filters):
+        parameter = f"query_{dimension.name}_{filter_index}"
+        where_parts.append(
+            _filter_sql(
+                _column(aliases[dimension.entity], dimension.expression, dialect), operator, parameter, dialect, value
+            )
+        )
+        parameters[parameter] = value
     root_entity = entities[root]
     selections = ",\n  ".join(select_parts)
     sql = f"select\n  {selections}\nfrom {_table(root_entity.source_table, dialect)} as {aliases[root]}"

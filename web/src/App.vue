@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, watch } from "vue";
 
 import ConnectionDialog from "./components/ConnectionDialog.vue";
+import AnalysisWorkspace from "./components/AnalysisWorkspace.vue";
 import BusinessModelPanel from "./components/BusinessModelPanel.vue";
 import HistoryPanel from "./components/HistoryPanel.vue";
 import ModelDialog from "./components/ModelDialog.vue";
@@ -16,6 +17,7 @@ import type { ConnectionProfile } from "./types";
 import type { SavedQueryParameter, SavedQueryParameterType } from "./types";
 
 const studio = useStudioStore();
+const workspaceMode = ref<"analysis" | "sql">("analysis");
 const activeTab = ref<"results" | "messages">("results");
 const sidebarTab = ref<"connections" | "history" | "library">("connections");
 const connectionDialog = ref(false);
@@ -205,8 +207,11 @@ async function useDemo() {
         </div>
       </section>
 
+      <AnalysisWorkspace v-else-if="workspaceMode === 'analysis'" @open-sql="workspaceMode = 'sql'" />
+
       <section v-else class="main-panel">
         <nav class="query-tabs" aria-label="Open queries">
+          <button class="analysis-return" title="Back to Analysis" @click="workspaceMode = 'analysis'">✦ Analysis</button>
           <button
             v-for="document in studio.documents"
             :key="document.id"

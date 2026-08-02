@@ -178,6 +178,106 @@ export interface SemanticTraceItem {
   sql: string;
 }
 
+export interface AnalysisTemplate {
+  id: string;
+  name: string;
+  description: string;
+  goal: string;
+  available: boolean;
+  unavailable_reason?: string;
+  estimated_queries: number;
+}
+
+export interface AnalysisDefinition {
+  id: string;
+  name: string;
+  description: string;
+  template: string;
+  goal: string;
+  semantic_model_id: string;
+  inputs: { name: string; type: string; required: boolean }[];
+  steps: Record<string, unknown>[];
+  outputs: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export type AnalysisRunState = "planning" | "running" | "completed" | "partially_completed" | "failed" | "cancelled";
+
+export interface AnalysisStep {
+  id: string;
+  title: string;
+  kind: string;
+  state: "queued" | "running" | "completed" | "failed" | "cancelled";
+  error?: string | null;
+}
+
+export interface AnalysisEvidence {
+  id: string;
+  step_id: string;
+  title: string;
+  semantic_plan: SemanticQueryPlan;
+  compiled_sql: string;
+  parameters: Record<string, unknown>;
+  columns: string[];
+  rows: unknown[][];
+  row_count: number;
+  duration_ms: number;
+  status: string;
+  error: string | null;
+  quality_flags: string[];
+}
+
+export interface AnalysisFinding {
+  id: string;
+  title: string;
+  claim: string;
+  magnitude: number;
+  finding_type: string;
+  method: string;
+  direction: string;
+  evidence_ids: string[];
+  follow_up_analysis?: { definition_id: string; scope_filters: { dimension: string; value: unknown }[] };
+}
+
+export interface AnalysisChart {
+  id: string;
+  type: "line" | "bar";
+  title: string;
+  labels: string[];
+  series: { name: string; values: number[] }[];
+  evidence_ids: string[];
+}
+
+export interface AnalysisRun {
+  id: string;
+  definition_id: string;
+  definition_name: string;
+  definition_snapshot: AnalysisDefinition;
+  semantic_model_id: string;
+  semantic_model_snapshot: SemanticModel;
+  input_values: Record<string, unknown>;
+  state: AnalysisRunState;
+  steps: AnalysisStep[];
+  evidence: AnalysisEvidence[];
+  findings: AnalysisFinding[];
+  charts: AnalysisChart[];
+  report: {
+    headline?: string;
+    summary?: string;
+    confidence?: "high" | "medium" | "low";
+    confidence_score?: number;
+    confidence_basis?: { evidence_coverage: number; data_completeness: number };
+    current_period?: string[];
+    comparison_period?: string[];
+  };
+  error: string | null;
+  parent_run_id: string | null;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+}
+
 export interface Column {
   name: string;
   type: string;

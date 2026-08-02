@@ -35,8 +35,20 @@ import {
   deleteSemanticModel,
   fetchSemanticModels,
   updateSemanticModel,
+  cancelAnalysisRun,
+  createAnalysisFromTemplate,
+  exportAnalysisReport,
+  fetchAnalysisDefinitions,
+  fetchAnalysisRun,
+  fetchAnalysisRuns,
+  fetchAnalysisTemplates,
+  followUpAnalysis,
+  startAnalysisRun,
 } from "../api";
 import type {
+  AnalysisDefinition,
+  AnalysisRun,
+  AnalysisTemplate,
   ConnectionProfile,
   ConnectionTest,
   DatabaseObject,
@@ -64,6 +76,7 @@ type Activity =
   | "demo"
   | "model"
   | "semantic"
+  | "analysis"
   | null;
 
 const initialModel =
@@ -94,6 +107,10 @@ export const useStudioStore = defineStore("studio", {
     selectedSemanticModelId: "",
     generationMode: "" as "" | "semantic" | "freeform",
     semanticTrace: [] as SemanticTraceItem[],
+    analysisTemplates: [] as AnalysisTemplate[],
+    analysisDefinitions: [] as AnalysisDefinition[],
+    analysisRuns: [] as AnalysisRun[],
+    activeAnalysisRun: null as AnalysisRun | null,
     savedQueryFolders: [] as string[],
     savedQueryTags: [] as string[],
     librarySearch: "",
@@ -627,6 +644,7 @@ export const useStudioStore = defineStore("studio", {
       this.selectedSemanticModelId = this.semanticModels.some((item) => item.id === documentModel)
         ? documentModel ?? ""
         : this.semanticModels[0]?.id ?? "";
+      await this.loadAnalysisLibrary();
     },
     async saveSemanticModel(model: Omit<SemanticModel, "id" | "created_at" | "updated_at">, identifier?: string) {
       this.activity = "semantic";
@@ -647,6 +665,80 @@ export const useStudioStore = defineStore("studio", {
       await deleteSemanticModel(identifier);
       if (this.selectedSemanticModelId === identifier) this.selectedSemanticModelId = "";
       await this.loadSemanticModels();
+    },
+    async loadAnalysisLibrary() {
+      this.analysisRuns = await fetchAnalysisRuns();
+      if (this.selectedSemanticModelId) {
+        [this.analysisTemplates, this.analysisDefinitions] = await Promise.all([
+          fetchAnalysisTemplates(this.selectedSemanticModelId),
+          fetchAnalysisDefinitions(this.selectedSemanticModelId),
+        ]);
+      } else {
+        this.analysisTemplates = [];
+        this.analysisDefinitions = [];
+      }
+      if (!this.activeAnalysisRun && this.analysisRuns.length) this.activeAnalysisRun = this.analysisRuns[0];
+    },
+    async runAnalysis(template: AnalysisTemplate, inputValues: Record<string, unknown>) {
+      if (!this.selectedSemanticModelId || !template.available) return;
+      this.activity = "analysis";
+      this.error = "";
+      try {
+        let definition = this.analysisDefinitions.find(
+          (item) => item.template === template.id && item.semantic_model_id === this.selectedSemanticModelId,
+        );
+        if (!definition) {
+          definition = await createAnalysisFromTemplate(this.selectedSemanticModelId, template.id);
+          this.analysisDefinitions.unshift(definition);
+        }
+        this.activeAnalysisRun = await startAnalysisRun(definition.id, inputValues);
+        await this.pollAnalysis(this.activeAnalysisRun.id);
+      } catch (error) {
+        this.error = message(error);
+      } finally {
+        this.activity = null;
+      }
+    },
+    async pollAnalysis(identifier: string) {
+      let run = await fetchAnalysisRun(identifier);
+      while (["planning", "running"].includes(run.state)) {
+        this.activeAnalysisRun = run;
+        await delay(180);
+        run = await fetchAnalysisRun(identifier);
+      }
+      this.activeAnalysisRun = run;
+      await this.loadAnalysisLibrary();
+    },
+    async openAnalysisRun(identifier: string) {
+      this.activeAnalysisRun = await fetchAnalysisRun(identifier);
+      if (["planning", "running"].includes(this.activeAnalysisRun.state)) {
+        void this.pollAnalysis(identifier);
+      }
+    },
+    async cancelAnalysis() {
+      if (!this.activeAnalysisRun || !["planning", "running"].includes(this.activeAnalysisRun.state)) return;
+      await cancelAnalysisRun(this.activeAnalysisRun.id);
+    },
+    async investigateFinding(findingId: string) {
+      if (!this.activeAnalysisRun) return;
+      this.activity = "analysis";
+      this.error = "";
+      try {
+        this.activeAnalysisRun = await followUpAnalysis(this.activeAnalysisRun.id, findingId);
+        await this.pollAnalysis(this.activeAnalysisRun.id);
+      } catch (error) {
+        this.error = message(error);
+      } finally {
+        this.activity = null;
+      }
+    },
+    async exportAnalysis(format: "pdf" | "html") {
+      if (!this.activeAnalysisRun) return;
+      try {
+        await exportAnalysisReport(this.activeAnalysisRun.id, format);
+      } catch (error) {
+        this.error = message(error);
+      }
     },
   },
 });

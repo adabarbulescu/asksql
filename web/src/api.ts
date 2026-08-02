@@ -15,6 +15,9 @@ import type {
   SemanticQueryPlan,
   SemanticTraceItem,
   WriteReview,
+  AnalysisDefinition,
+  AnalysisRun,
+  AnalysisTemplate,
 } from "./types";
 
 export function fetchWorkspace(): Promise<WorkspaceSnapshot> {
@@ -107,6 +110,59 @@ export function compileSemanticModel(
   return request(`/api/semantic-models/${encodeURIComponent(identifier)}/compile`, {
     method: "POST", body: JSON.stringify({ connection, metrics, dimensions }),
   });
+}
+
+export async function fetchAnalysisTemplates(semanticModelId: string): Promise<AnalysisTemplate[]> {
+  const payload = await request<{ templates: AnalysisTemplate[] }>(
+    `/api/analysis-templates?semantic_model_id=${encodeURIComponent(semanticModelId)}`,
+  );
+  return payload.templates;
+}
+
+export async function fetchAnalysisDefinitions(semanticModelId?: string): Promise<AnalysisDefinition[]> {
+  const suffix = semanticModelId ? `?semantic_model_id=${encodeURIComponent(semanticModelId)}` : "";
+  return (await request<{ analysisDefinitions: AnalysisDefinition[] }>(`/api/analysis-definitions${suffix}`)).analysisDefinitions;
+}
+
+export function createAnalysisFromTemplate(semanticModelId: string, template: string): Promise<AnalysisDefinition> {
+  return request<AnalysisDefinition>("/api/analysis-definitions/from-template", {
+    method: "POST", body: JSON.stringify({ semantic_model_id: semanticModelId, template }),
+  });
+}
+
+export async function fetchAnalysisRuns(): Promise<AnalysisRun[]> {
+  return (await request<{ analysisRuns: AnalysisRun[] }>("/api/analysis-runs")).analysisRuns;
+}
+
+export function fetchAnalysisRun(identifier: string): Promise<AnalysisRun> {
+  return request<AnalysisRun>(`/api/analysis-runs/${encodeURIComponent(identifier)}`);
+}
+
+export function startAnalysisRun(definitionId: string, inputValues: Record<string, unknown>): Promise<AnalysisRun> {
+  return request<AnalysisRun>("/api/analysis-runs", {
+    method: "POST", body: JSON.stringify({ definition_id: definitionId, input_values: inputValues }),
+  });
+}
+
+export function cancelAnalysisRun(identifier: string): Promise<AnalysisRun> {
+  return request<AnalysisRun>(`/api/analysis-runs/${encodeURIComponent(identifier)}`, { method: "DELETE" });
+}
+
+export function followUpAnalysis(identifier: string, findingId: string): Promise<AnalysisRun> {
+  return request<AnalysisRun>(`/api/analysis-runs/${encodeURIComponent(identifier)}/follow-up`, {
+    method: "POST", body: JSON.stringify({ finding_id: findingId }),
+  });
+}
+
+export async function exportAnalysisReport(identifier: string, format: "pdf" | "html"): Promise<void> {
+  const response = await fetch(`/api/analysis-runs/${encodeURIComponent(identifier)}/export?format=${format}`);
+  if (!response.ok) throw new Error(`Analysis export failed (${response.status})`);
+  const url = URL.createObjectURL(await response.blob());
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `asksql-analysis-${identifier}.${format}`;
+  anchor.click();
+  URL.revokeObjectURL(url);
 }
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {

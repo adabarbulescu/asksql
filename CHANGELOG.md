@@ -2,6 +2,20 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.8.0] - 2026-08-02
+
+- Added a persistent Analysis Engine with reusable declarative workflows, bounded semantic query plans, immutable
+  definition and Business Model snapshots, explicit lifecycle states, cancellation, restart recovery, and workspace
+  migration v5 to v6.
+- Added the production Revenue Investigation workflow with period comparison, monthly trend, metric decomposition,
+  dimensional contribution analysis, contextual follow-ups, and a strict 30-query execution budget.
+- Added deterministic findings and confidence based on evidence coverage and data completeness. Every claim retains
+  its semantic plan, compiled SQL, bound parameters, result rows, timing, and data-quality flags.
+- Replaced Studio's default query surface with “What do you want to understand?”, including workflow configuration,
+  live progress, reusable reports, SVG charts, evidence inspection, recent analysis recovery, and HTML/PDF export.
+- Added SQLite, conditional PostgreSQL, migration, API, lifecycle, report export, store, chart, and Analysis workspace
+  tests. The SQL Workbench remains available as a first-class surface.
+
 ## [0.7.0] - 2026-08-02
 
 - Added a persistent Semantic Layer with schema-validated entities, business metrics, dimensions, default filters,
@@ -70,4 +84,5 @@ builds do not require those credentials.
 [0.3.0]: https://github.com/adabarbulescu/asksql/releases/tag/v0.3.0
 [0.6.0]: https://github.com/adabarbulescu/asksql/releases/tag/v0.6.0
 [0.7.0]: https://github.com/adabarbulescu/asksql/releases/tag/v0.7.0
+[0.8.0]: https://github.com/adabarbulescu/asksql/releases/tag/v0.8.0
 [0.2.0]: https://github.com/adabarbulescu/asksql/releases/tag/v0.2.0

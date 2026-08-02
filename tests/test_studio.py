@@ -17,6 +17,7 @@ class StudioApiTest(unittest.TestCase):
         self.addCleanup(self.directory.cleanup)
         root = Path(self.directory.name)
         database = root / "studio.db"
+        self.database = database
         with sqlite3.connect(database) as connection:
             connection.execute("create table projects(id integer primary key, name text)")
             connection.execute("insert into projects(name) values ('AskSQL Studio')")
@@ -353,6 +354,122 @@ class StudioApiTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertIn("unknown column", response.json()["detail"])
+
+    def test_analysis_workflow_runs_reports_exports_and_drills_down(self) -> None:
+        with sqlite3.connect(self.database) as connection:
+            connection.execute(
+                "create table z_orders(id integer primary key, amount real, status text, created_at text, country text)"
+            )
+            connection.executemany(
+                "insert into z_orders(amount, status, created_at, country) values (?, ?, ?, ?)",
+                [
+                    (100, "completed", "2026-07-05", "Germany"),
+                    (50, "completed", "2026-07-15", "France"),
+                    (70, "completed", "2026-08-05", "Germany"),
+                    (70, "completed", "2026-08-15", "France"),
+                ],
+            )
+        model = self.client.post(
+            "/api/semantic-models",
+            json={
+                "name": "Commerce",
+                "connection_hint": "local",
+                "entities": [{"name": "orders", "source_table": "z_orders", "primary_key": "id", "description": ""}],
+                "metrics": [
+                    {
+                        "name": "revenue",
+                        "label": "Revenue",
+                        "description": "",
+                        "entity": "orders",
+                        "aggregation": "sum",
+                        "expression": "amount",
+                        "filters": [{"column": "status", "operator": "eq", "value": "completed"}],
+                        "format": "currency",
+                    },
+                    {
+                        "name": "orders",
+                        "label": "Orders",
+                        "description": "",
+                        "entity": "orders",
+                        "aggregation": "count_distinct",
+                        "expression": "id",
+                        "filters": [{"column": "status", "operator": "eq", "value": "completed"}],
+                        "format": "integer",
+                    },
+                ],
+                "dimensions": [
+                    {
+                        "name": "order_date",
+                        "label": "Order date",
+                        "description": "",
+                        "entity": "orders",
+                        "expression": "created_at",
+                        "data_type": "datetime",
+                        "time_granularities": ["month"],
+                    },
+                    {
+                        "name": "country",
+                        "label": "Country",
+                        "description": "",
+                        "entity": "orders",
+                        "expression": "country",
+                        "data_type": "text",
+                        "time_granularities": [],
+                    },
+                ],
+                "relationships": [],
+            },
+        ).json()
+        template = self.client.get("/api/analysis-templates", params={"semantic_model_id": model["id"]}).json()[
+            "templates"
+        ][0]
+        definition = self.client.post(
+            "/api/analysis-definitions/from-template",
+            json={"semantic_model_id": model["id"], "template": "revenue_investigation"},
+        ).json()
+        started = self.client.post(
+            "/api/analysis-runs",
+            json={
+                "definition_id": definition["id"],
+                "input_values": {
+                    "current_start": "2026-08-01",
+                    "current_end": "2026-09-01",
+                    "previous_start": "2026-07-01",
+                    "previous_end": "2026-08-01",
+                },
+            },
+        ).json()
+
+        import time
+
+        run = started
+        for _ in range(200):
+            run = self.client.get(f"/api/analysis-runs/{started['id']}").json()
+            if run["state"] not in {"planning", "running"}:
+                break
+            time.sleep(0.01)
+
+        self.assertTrue(template["available"])
+        self.assertGreaterEqual(template["estimated_queries"], 5)
+        self.assertEqual(run["state"], "completed")
+        self.assertIn("decreased by 6.7%", run["report"]["headline"])
+        self.assertTrue(run["charts"])
+        self.assertTrue(run["evidence"])
+
+        pdf = self.client.get(f"/api/analysis-runs/{run['id']}/export", params={"format": "pdf"})
+        self.assertEqual(pdf.status_code, 200)
+        self.assertTrue(pdf.text.startswith("%PDF-1.4"))
+
+        driver = next(item for item in run["findings"] if item.get("follow_up_analysis"))
+        follow_up = self.client.post(f"/api/analysis-runs/{run['id']}/follow-up", json={"finding_id": driver["id"]})
+        self.assertEqual(follow_up.status_code, 202)
+        self.assertEqual(follow_up.json()["parent_run_id"], run["id"])
+        for _ in range(200):
+            follow_up_run = self.client.get(f"/api/analysis-runs/{follow_up.json()['id']}").json()
+            if follow_up_run["state"] not in {"planning", "running"}:
+                break
+            time.sleep(0.01)
+        self.assertEqual(follow_up_run["state"], "completed")
 
     def test_parameterized_saved_query_validates_binds_exports_and_hides_sensitive_values(self) -> None:
         document = self.client.post(

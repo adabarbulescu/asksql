@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from asksql.analysis import revenue_investigation_definition
 from asksql.models import ExecutionStatus, QueryExecution, QueryResult
 from asksql.workspace import WorkspaceStore
 
@@ -200,16 +201,67 @@ class WorkspaceStoreTest(unittest.TestCase):
         self.assertEqual(restored.semantic_model_id, model.id)
         self.assertEqual(restored.semantic_plan["metrics"], ["projects_count"])  # type: ignore[index]
 
-    def test_migrates_v4_workspace_to_v5_with_backup_and_preserves_documents(self) -> None:
+    def test_persists_immutable_analysis_snapshots_and_recovers_interrupted_runs(self) -> None:
+        model = self.store.create_semantic_model(
+            {
+                "name": "Commerce",
+                "connection_hint": "local",
+                "entities": [{"name": "orders", "source_table": "orders", "primary_key": "id", "description": ""}],
+                "metrics": [
+                    {
+                        "name": "revenue",
+                        "label": "Revenue",
+                        "description": "",
+                        "entity": "orders",
+                        "aggregation": "sum",
+                        "expression": "amount",
+                        "filters": [],
+                        "format": "currency",
+                    }
+                ],
+                "dimensions": [
+                    {
+                        "name": "order_date",
+                        "label": "Order date",
+                        "description": "",
+                        "entity": "orders",
+                        "expression": "created_at",
+                        "data_type": "date",
+                        "time_granularities": ["month"],
+                    }
+                ],
+                "relationships": [],
+            }
+        )
+        definition = self.store.create_analysis_definition(revenue_investigation_definition(model).payload())
+        run = self.store.create_analysis_run(
+            definition,
+            model.payload(),
+            {
+                "current_start": "2026-08-01",
+                "current_end": "2026-09-01",
+                "previous_start": "2026-07-01",
+                "previous_end": "2026-08-01",
+            },
+        )
+
+        reopened = WorkspaceStore(self.store.path)
+        recovered = reopened.get_analysis_run(run.id)
+
+        self.assertEqual(recovered.state, "cancelled")
+        self.assertEqual(recovered.definition_snapshot["goal"], definition.goal)
+        self.assertEqual(recovered.semantic_model_snapshot["metrics"][0]["name"], "revenue")  # type: ignore[index]
+
+    def test_migrates_v5_workspace_to_v6_with_backup_and_preserves_documents(self) -> None:
         document = self.store.create_document("local", title="Existing work")
         with sqlite3.connect(self.store.path) as connection:
-            connection.execute("update workspace_meta set version = 4")
+            connection.execute("update workspace_meta set version = 5")
 
         migrated = WorkspaceStore(self.store.path)
 
         self.assertEqual(migrated.get_document(document.id).title, "Existing work")
         self.assertEqual(migrated.saved_queries(), [])
-        self.assertTrue(self.store.path.with_name("workspace.db.pre-v5.bak").is_file())
+        self.assertTrue(self.store.path.with_name("workspace.db.pre-v6.bak").is_file())
 
     def test_backs_up_existing_unversioned_workspace_before_adopting_it(self) -> None:
         path = Path(self.directory.name) / "old-workspace.db"

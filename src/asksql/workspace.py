@@ -10,12 +10,13 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from asksql.analysis import AnalysisDefinition, definition_from_payload
 from asksql.connections import config_directory
 from asksql.models import ExecutionStatus, MutationResult, QueryExecution, QueryResult
 from asksql.parameters import ParameterDefinition
 from asksql.semantic import SemanticModel, model_from_payload
 
-WORKSPACE_VERSION = 5
+WORKSPACE_VERSION = 6
 
 DOCUMENT_STATES = {"draft", "generated", "running", "completed", "failed", "cancelled"}
 
@@ -83,6 +84,31 @@ class SavedQuery:
     updated_at: str
     source_document_id: str | None
     parameters: list[dict[str, object]]
+
+    def payload(self) -> dict[str, object]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class AnalysisRun:
+    id: str
+    definition_id: str
+    definition_name: str
+    definition_snapshot: dict[str, object]
+    semantic_model_id: str
+    semantic_model_snapshot: dict[str, object]
+    input_values: dict[str, object]
+    state: str
+    steps: list[dict[str, object]]
+    evidence: list[dict[str, object]]
+    findings: list[dict[str, object]]
+    charts: list[dict[str, object]]
+    report: dict[str, object]
+    error: str | None
+    parent_run_id: str | None
+    created_at: str
+    updated_at: str
+    completed_at: str | None
 
     def payload(self) -> dict[str, object]:
         return asdict(self)
@@ -602,6 +628,139 @@ class WorkspaceStore:
             if cursor.rowcount != 1:
                 raise KeyError(f"unknown semantic model: {identifier}")
 
+    def create_analysis_definition(self, payload: dict[str, object]) -> AnalysisDefinition:
+        identifier = uuid.uuid4().hex
+        timestamp = _timestamp()
+        definition = definition_from_payload(payload, identifier=identifier, created_at=timestamp, updated_at=timestamp)
+        self.get_semantic_model(definition.semantic_model_id)
+        with self._connect() as connection:
+            connection.execute(
+                "insert into analysis_definitions(id, name, semantic_model_id, definition, created_at, updated_at) "
+                "values (?, ?, ?, ?, ?, ?)",
+                (
+                    identifier,
+                    definition.name,
+                    definition.semantic_model_id,
+                    _analysis_definition_json(definition),
+                    timestamp,
+                    timestamp,
+                ),
+            )
+        return self.get_analysis_definition(identifier)
+
+    def get_analysis_definition(self, identifier: str) -> AnalysisDefinition:
+        with self._connect() as connection:
+            row = connection.execute("select * from analysis_definitions where id = ?", (identifier,)).fetchone()
+        if row is None:
+            raise KeyError(f"unknown analysis definition: {identifier}")
+        return _analysis_definition(row)
+
+    def analysis_definitions(self, semantic_model_id: str | None = None) -> list[AnalysisDefinition]:
+        with self._connect() as connection:
+            if semantic_model_id:
+                rows = connection.execute(
+                    "select * from analysis_definitions where semantic_model_id = ? order by updated_at desc",
+                    (semantic_model_id,),
+                ).fetchall()
+            else:
+                rows = connection.execute("select * from analysis_definitions order by updated_at desc").fetchall()
+        return [_analysis_definition(row) for row in rows]
+
+    def update_analysis_definition(self, identifier: str, payload: dict[str, object]) -> AnalysisDefinition:
+        current = self.get_analysis_definition(identifier)
+        timestamp = _timestamp()
+        definition = definition_from_payload(
+            payload, identifier=identifier, created_at=current.created_at, updated_at=timestamp
+        )
+        self.get_semantic_model(definition.semantic_model_id)
+        with self._connect() as connection:
+            connection.execute(
+                "update analysis_definitions set name = ?, semantic_model_id = ?, definition = ?, updated_at = ? "
+                "where id = ?",
+                (
+                    definition.name,
+                    definition.semantic_model_id,
+                    _analysis_definition_json(definition),
+                    timestamp,
+                    identifier,
+                ),
+            )
+        return self.get_analysis_definition(identifier)
+
+    def delete_analysis_definition(self, identifier: str) -> None:
+        with self._connect() as connection:
+            cursor = connection.execute("delete from analysis_definitions where id = ?", (identifier,))
+            if cursor.rowcount != 1:
+                raise KeyError(f"unknown analysis definition: {identifier}")
+
+    def create_analysis_run(
+        self,
+        definition: AnalysisDefinition,
+        semantic_model_snapshot: dict[str, object],
+        input_values: dict[str, object],
+        *,
+        parent_run_id: str | None = None,
+    ) -> AnalysisRun:
+        identifier = uuid.uuid4().hex
+        timestamp = _timestamp()
+        with self._connect() as connection:
+            connection.execute(
+                """
+                insert into analysis_runs(
+                    id, definition_id, definition_name, definition_snapshot, semantic_model_id, semantic_model_snapshot,
+                    input_values, state, steps, evidence, findings, charts, report, error,
+                    parent_run_id, created_at, updated_at, completed_at
+                ) values (?, ?, ?, ?, ?, ?, ?, 'planning', '[]', '[]', '[]', '[]', '{}', null, ?, ?, ?, null)
+                """,
+                (
+                    identifier,
+                    definition.id,
+                    definition.name,
+                    _json_object(definition.payload()),
+                    definition.semantic_model_id,
+                    _json_object(semantic_model_snapshot),
+                    _json_object(input_values),
+                    parent_run_id,
+                    timestamp,
+                    timestamp,
+                ),
+            )
+        return self.get_analysis_run(identifier)
+
+    def get_analysis_run(self, identifier: str) -> AnalysisRun:
+        with self._connect() as connection:
+            row = connection.execute("select * from analysis_runs where id = ?", (identifier,)).fetchone()
+        if row is None:
+            raise KeyError(f"unknown analysis run: {identifier}")
+        return _analysis_run(row)
+
+    def analysis_runs(self, limit: int = 100) -> list[AnalysisRun]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "select * from analysis_runs order by created_at desc limit ?", (limit,)
+            ).fetchall()
+        return [_analysis_run(row) for row in rows]
+
+    def update_analysis_run(self, identifier: str, **changes: object) -> AnalysisRun:
+        allowed = {"state", "steps", "evidence", "findings", "charts", "report", "error", "completed_at"}
+        invalid = set(changes) - allowed
+        if invalid:
+            raise ValueError(f"unsupported analysis run field: {sorted(invalid)[0]}")
+        assignments: list[str] = []
+        values: list[object] = []
+        for name, value in changes.items():
+            if name in {"steps", "evidence", "findings", "charts", "report"}:
+                value = json.dumps(value, separators=(",", ":"), default=str)
+            assignments.append(f"{name} = ?")
+            values.append(value)
+        assignments.append("updated_at = ?")
+        values.extend((_timestamp(), identifier))
+        with self._connect() as connection:
+            cursor = connection.execute(f"update analysis_runs set {', '.join(assignments)} where id = ?", values)
+            if cursor.rowcount != 1:
+                raise KeyError(f"unknown analysis run: {identifier}")
+        return self.get_analysis_run(identifier)
+
     def _sensitive_names(self, saved_query_id: str | None) -> set[str]:
         if not saved_query_id:
             return set()
@@ -747,6 +906,37 @@ class WorkspaceStore:
                 );
                 create index if not exists semantic_models_connection_updated
                     on semantic_models(connection_hint, updated_at desc);
+                create table if not exists analysis_definitions(
+                    id text primary key,
+                    name text not null,
+                    semantic_model_id text not null,
+                    definition text not null,
+                    created_at text not null,
+                    updated_at text not null
+                );
+                create index if not exists analysis_definitions_model_updated
+                    on analysis_definitions(semantic_model_id, updated_at desc);
+                create table if not exists analysis_runs(
+                    id text primary key,
+                    definition_id text not null,
+                    definition_name text not null,
+                    definition_snapshot text not null,
+                    semantic_model_id text not null,
+                    semantic_model_snapshot text not null,
+                    input_values text not null,
+                    state text not null,
+                    steps text not null default '[]',
+                    evidence text not null default '[]',
+                    findings text not null default '[]',
+                    charts text not null default '[]',
+                    report text not null default '{}',
+                    error text,
+                    parent_run_id text,
+                    created_at text not null,
+                    updated_at text not null,
+                    completed_at text
+                );
+                create index if not exists analysis_runs_created on analysis_runs(created_at desc);
                 """
             )
             _ensure_column(connection, "query_documents", "saved_query_id", "text")
@@ -754,12 +944,13 @@ class WorkspaceStore:
             _ensure_column(connection, "saved_queries", "parameters", "text not null default '[]'")
             _ensure_column(connection, "query_documents", "semantic_model_id", "text")
             _ensure_column(connection, "query_documents", "semantic_plan", "text")
+            _ensure_column(connection, "analysis_runs", "definition_snapshot", "text not null default '{}'")
             row = connection.execute("select version from workspace_meta limit 1").fetchone()
             if row is None:
                 if existed:
                     self._backup("pre-migration")
                 connection.execute("insert into workspace_meta(version) values (?)", (WORKSPACE_VERSION,))
-            elif row[0] in {1, 2, 3, 4}:
+            elif row[0] in {1, 2, 3, 4, 5}:
                 self._backup(f"pre-v{WORKSPACE_VERSION}")
                 connection.execute("update workspace_meta set version = ?", (WORKSPACE_VERSION,))
             elif row[0] != WORKSPACE_VERSION:
@@ -774,6 +965,15 @@ class WorkspaceStore:
                 where lifecycle_state = 'running'
                 """,
                 (_timestamp(),),
+            )
+            connection.execute(
+                """
+                update analysis_runs
+                set state = 'cancelled', error = 'Analysis interrupted when Studio stopped',
+                    updated_at = ?, completed_at = ?
+                where state in ('planning', 'running')
+                """,
+                (_timestamp(), _timestamp()),
             )
         os.chmod(self.path, 0o600)
 
@@ -864,6 +1064,45 @@ def _semantic_definition(model: SemanticModel) -> str:
     for key in ("id", "created_at", "updated_at"):
         payload.pop(key, None)
     return json.dumps(payload, separators=(",", ":"), default=str)
+
+
+def _analysis_definition(row: sqlite3.Row) -> AnalysisDefinition:
+    return definition_from_payload(
+        json.loads(row["definition"]),
+        identifier=str(row["id"]),
+        created_at=str(row["created_at"]),
+        updated_at=str(row["updated_at"]),
+    )
+
+
+def _analysis_definition_json(definition: AnalysisDefinition) -> str:
+    payload = definition.payload()
+    for key in ("id", "created_at", "updated_at"):
+        payload.pop(key, None)
+    return json.dumps(payload, separators=(",", ":"), default=str)
+
+
+def _analysis_run(row: sqlite3.Row) -> AnalysisRun:
+    return AnalysisRun(
+        id=str(row["id"]),
+        definition_id=str(row["definition_id"]),
+        definition_name=str(row["definition_name"]),
+        definition_snapshot=dict(json.loads(row["definition_snapshot"])),
+        semantic_model_id=str(row["semantic_model_id"]),
+        semantic_model_snapshot=dict(json.loads(row["semantic_model_snapshot"])),
+        input_values=dict(json.loads(row["input_values"])),
+        state=str(row["state"]),
+        steps=list(json.loads(row["steps"])),
+        evidence=list(json.loads(row["evidence"])),
+        findings=list(json.loads(row["findings"])),
+        charts=list(json.loads(row["charts"])),
+        report=dict(json.loads(row["report"])),
+        error=row["error"],
+        parent_run_id=row["parent_run_id"],
+        created_at=str(row["created_at"]),
+        updated_at=str(row["updated_at"]),
+        completed_at=row["completed_at"],
+    )
 
 
 def _json_object(value: dict[str, object] | None) -> str | None:

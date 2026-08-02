@@ -71,6 +71,12 @@ native SQLite or PostgreSQL driver binding; parameters marked sensitive are neve
 Business Model editor defines schema-validated entities, metrics, dimensions, default filters, time grains, and
 relationships. Questions that name these objects are resolved into an explicit semantic plan and compiled
 deterministically for SQLite or PostgreSQL; Studio displays the definitions and joins used to produce the SQL.
+Studio opens on the Analysis Engine: choose Revenue Investigation, define two comparable periods, and run a bounded
+semantic workflow instead of writing a prompt or query. The resulting report explains the measured change through
+trend, volume, average order value, and dimension contributions; findings can launch scoped follow-up analyses.
+Every conclusion links back to an inspectable semantic plan, safely bound SQL, result evidence, timing, and quality
+flags. Analysis definitions, immutable run snapshots, progress, reports, and recent runs persist across restarts, and
+completed reports export to HTML or PDF. The SQL Workbench remains available from the Analysis toolbar.
 Unmatched questions retain free-form generation while receiving the model's business vocabulary as context. The
 database stays on your machine; model providers receive schema and the question, never result rows.
 
