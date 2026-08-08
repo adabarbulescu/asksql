@@ -242,6 +242,10 @@ def compile_query(model: SemanticModel, plan: SemanticQueryPlan, dialect: str) -
     selected_metrics = [_lookup(metrics, name, "metric") for name in plan.metrics]
     if not selected_metrics:
         raise SemanticModelError("semantic query requires at least one metric")
+    if len({metric.entity for metric in selected_metrics}) > 1:
+        raise SemanticModelError(
+            "metrics from different entities require explicit pre-aggregation before they can be combined"
+        )
     selected_dimensions = [
         (_lookup(dimensions, str(item.get("name")), "dimension"), item.get("granularity")) for item in plan.dimensions
     ]

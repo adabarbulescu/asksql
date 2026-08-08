@@ -12,12 +12,16 @@ import type {
   SchemaDetails,
   SetupStatus,
   SemanticModel,
+  SemanticModelInput,
+  SemanticDraft,
+  SemanticReadiness,
   SemanticQueryPlan,
   SemanticTraceItem,
   WriteReview,
   AnalysisDefinition,
   AnalysisRun,
   AnalysisTemplate,
+  AnalysisTemplateSelection,
 } from "./types";
 
 export function fetchWorkspace(): Promise<WorkspaceSnapshot> {
@@ -90,13 +94,25 @@ export async function fetchSemanticModels(connection?: string): Promise<Semantic
   return (await request<{ semanticModels: SemanticModel[] }>(`/api/semantic-models${suffix}`)).semanticModels;
 }
 
-export function createSemanticModel(payload: Omit<SemanticModel, "id" | "created_at" | "updated_at">): Promise<SemanticModel> {
+export function createSemanticModel(payload: SemanticModelInput): Promise<SemanticModel> {
   return request<SemanticModel>("/api/semantic-models", { method: "POST", body: JSON.stringify(payload) });
 }
 
-export function updateSemanticModel(identifier: string, payload: Omit<SemanticModel, "id" | "created_at" | "updated_at">): Promise<SemanticModel> {
+export function updateSemanticModel(identifier: string, payload: SemanticModelInput): Promise<SemanticModel> {
   return request<SemanticModel>(`/api/semantic-models/${encodeURIComponent(identifier)}`, {
     method: "PUT", body: JSON.stringify(payload),
+  });
+}
+
+export function proposeSemanticModel(connection: string): Promise<SemanticDraft> {
+  return request<SemanticDraft>("/api/semantic-models/propose", {
+    method: "POST", body: JSON.stringify({ connection }),
+  });
+}
+
+export function checkSemanticReadiness(payload: SemanticModelInput): Promise<SemanticReadiness> {
+  return request<SemanticReadiness>("/api/semantic-models/readiness", {
+    method: "POST", body: JSON.stringify(payload),
   });
 }
 
@@ -124,9 +140,13 @@ export async function fetchAnalysisDefinitions(semanticModelId?: string): Promis
   return (await request<{ analysisDefinitions: AnalysisDefinition[] }>(`/api/analysis-definitions${suffix}`)).analysisDefinitions;
 }
 
-export function createAnalysisFromTemplate(semanticModelId: string, template: string): Promise<AnalysisDefinition> {
+export function createAnalysisFromTemplate(
+  semanticModelId: string,
+  template: string,
+  selection: AnalysisTemplateSelection = {},
+): Promise<AnalysisDefinition> {
   return request<AnalysisDefinition>("/api/analysis-definitions/from-template", {
-    method: "POST", body: JSON.stringify({ semantic_model_id: semanticModelId, template }),
+    method: "POST", body: JSON.stringify({ semantic_model_id: semanticModelId, template, ...selection }),
   });
 }
 

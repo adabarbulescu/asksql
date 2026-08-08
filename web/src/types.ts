@@ -165,6 +165,69 @@ export interface SemanticModel {
   updated_at: string;
 }
 
+export type SemanticModelInput = Omit<SemanticModel, "id" | "created_at" | "updated_at">;
+
+export interface SemanticSuggestion {
+  path: string;
+  kind: "entity" | "metric" | "dimension" | "relationship";
+  label: string;
+  reason: string;
+  confidence: "high" | "medium" | "low";
+}
+
+export interface SemanticDraft {
+  state: "draft";
+  requires_review: true;
+  model: SemanticModelInput;
+  suggestions: SemanticSuggestion[];
+  warnings: string[];
+}
+
+export interface ReadinessCheck {
+  code: string;
+  status: "passed" | "warning" | "failed";
+  severity: "warning" | "error";
+  message: string;
+  path: string | null;
+}
+
+export interface WorkflowEligibility {
+  workflow: string;
+  eligible: boolean;
+  missing: string[];
+  compatible_metrics: string[];
+  compatible_time_dimensions: string[];
+}
+
+export interface ValidationQuerySpec {
+  id: string;
+  kind: "null" | "duplicate" | "cardinality" | "freshness";
+  title: string;
+  severity: "warning" | "error";
+  sql: string;
+  expectation: Record<string, unknown>;
+  subject: Record<string, string>;
+}
+
+export interface SemanticReadiness {
+  ready: boolean;
+  checks: ReadinessCheck[];
+  workflows: WorkflowEligibility[];
+  validation_queries: ValidationQuerySpec[];
+  validation_results?: ValidationResult[];
+}
+
+export interface ValidationResult {
+  id: string;
+  title: string;
+  status: "passed" | "warning" | "failed" | "error";
+  severity: "warning" | "error";
+  observed: unknown;
+  message: string;
+  sql: string;
+  subject: Record<string, string>;
+}
+
 export interface SemanticQueryPlan {
   model_id: string;
   metrics: string[];
@@ -186,6 +249,13 @@ export interface AnalysisTemplate {
   available: boolean;
   unavailable_reason?: string;
   estimated_queries: number;
+}
+
+export interface AnalysisTemplateSelection {
+  metric_name?: string;
+  time_dimension_name?: string;
+  component_metric_name?: string;
+  slice_dimension_names?: string[];
 }
 
 export interface AnalysisDefinition {
@@ -267,7 +337,7 @@ export interface AnalysisRun {
     summary?: string;
     confidence?: "high" | "medium" | "low";
     confidence_score?: number;
-    confidence_basis?: { evidence_coverage: number; data_completeness: number };
+    confidence_basis?: { evidence_coverage: number; data_completeness: number; semantic_trust?: number };
     current_period?: string[];
     comparison_period?: string[];
   };

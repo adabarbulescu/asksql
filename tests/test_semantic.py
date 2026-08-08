@@ -125,6 +125,25 @@ class SemanticLayerTest(unittest.TestCase):
         with self.assertRaisesRegex(SemanticModelError, "fan out metric grain"):
             compile_query(model, plan, "postgres")
 
+    def test_refuses_metrics_from_different_entities_without_preaggregation(self) -> None:
+        payload = orders_model()
+        payload["metrics"].append(  # type: ignore[union-attr]
+            {
+                "name": "customers",
+                "label": "Customers",
+                "description": "Customer count",
+                "entity": "customers",
+                "aggregation": "count_distinct",
+                "expression": "id",
+                "filters": [],
+                "format": "number",
+            }
+        )
+        model = model_from_payload(payload, identifier="commerce")
+
+        with self.assertRaisesRegex(SemanticModelError, "explicit pre-aggregation"):
+            compile_query(model, SemanticQueryPlan("commerce", ("revenue", "customers")), "sqlite")
+
     def test_executes_compiled_sqlite_with_native_binding(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "semantic.db"

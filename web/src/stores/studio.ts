@@ -32,8 +32,10 @@ import {
   fetchSavedQueries,
   updateSavedQuery,
   createSemanticModel,
+  checkSemanticReadiness,
   deleteSemanticModel,
   fetchSemanticModels,
+  proposeSemanticModel,
   updateSemanticModel,
   cancelAnalysisRun,
   createAnalysisFromTemplate,
@@ -49,6 +51,7 @@ import type {
   AnalysisDefinition,
   AnalysisRun,
   AnalysisTemplate,
+  AnalysisTemplateSelection,
   ConnectionProfile,
   ConnectionTest,
   DatabaseObject,
@@ -59,6 +62,9 @@ import type {
   SavedQuery,
   SavedQueryParameter,
   SemanticModel,
+  SemanticModelInput,
+  SemanticDraft,
+  SemanticReadiness,
   SemanticTraceItem,
   SetupStatus,
   TableSchema,
@@ -104,6 +110,8 @@ export const useStudioStore = defineStore("studio", {
     history: [] as HistoryEntry[],
     savedQueries: [] as SavedQuery[],
     semanticModels: [] as SemanticModel[],
+    semanticDraft: null as SemanticDraft | null,
+    semanticReadiness: null as SemanticReadiness | null,
     selectedSemanticModelId: "",
     generationMode: "" as "" | "semantic" | "freeform",
     semanticTrace: [] as SemanticTraceItem[],
@@ -178,6 +186,10 @@ export const useStudioStore = defineStore("studio", {
       await this.loadSetup();
     },
     async selectConnection(name: string, updateDocument = true) {
+      if (name !== this.selectedConnection) {
+        this.semanticDraft = null;
+        this.semanticReadiness = null;
+      }
       this.selectedConnection = name;
       window.localStorage.setItem("asksql-connection", name);
       this.tables = [];
@@ -646,13 +658,44 @@ export const useStudioStore = defineStore("studio", {
         : this.semanticModels[0]?.id ?? "";
       await this.loadAnalysisLibrary();
     },
-    async saveSemanticModel(model: Omit<SemanticModel, "id" | "created_at" | "updated_at">, identifier?: string) {
+    async proposeBusinessModel() {
+      if (!this.selectedConnection) return null;
+      this.activity = "semantic";
+      this.error = "";
+      try {
+        this.semanticDraft = await proposeSemanticModel(this.selectedConnection);
+        this.semanticReadiness = await checkSemanticReadiness(this.semanticDraft.model);
+        return this.semanticDraft;
+      } catch (error) {
+        this.error = message(error);
+        throw error;
+      } finally {
+        this.activity = null;
+      }
+    },
+    async checkBusinessModel(model: SemanticModelInput) {
+      this.activity = "semantic";
+      this.error = "";
+      try {
+        this.semanticReadiness = await checkSemanticReadiness(model);
+        return this.semanticReadiness;
+      } catch (error) {
+        this.error = message(error);
+        throw error;
+      } finally {
+        this.activity = null;
+      }
+    },
+    async saveSemanticModel(model: SemanticModelInput, identifier?: string) {
       this.activity = "semantic";
       this.error = "";
       try {
         const saved = identifier ? await updateSemanticModel(identifier, model) : await createSemanticModel(model);
         await this.loadSemanticModels(saved.connection_hint);
         this.selectedSemanticModelId = saved.id;
+        await this.loadAnalysisLibrary();
+        this.semanticDraft = null;
+        this.semanticReadiness = await checkSemanticReadiness(model);
         return saved;
       } catch (error) {
         this.error = message(error);
@@ -664,10 +707,20 @@ export const useStudioStore = defineStore("studio", {
     async removeSemanticModel(identifier: string) {
       await deleteSemanticModel(identifier);
       if (this.selectedSemanticModelId === identifier) this.selectedSemanticModelId = "";
+      this.semanticReadiness = null;
       await this.loadSemanticModels();
     },
+    async selectSemanticModel(identifier: string) {
+      this.selectedSemanticModelId = identifier;
+      this.activeAnalysisRun = null;
+      this.semanticReadiness = null;
+      await this.loadAnalysisLibrary();
+    },
     async loadAnalysisLibrary() {
-      this.analysisRuns = await fetchAnalysisRuns();
+      const allRuns = await fetchAnalysisRuns();
+      this.analysisRuns = this.selectedSemanticModelId
+        ? allRuns.filter((item) => item.semantic_model_id === this.selectedSemanticModelId)
+        : [];
       if (this.selectedSemanticModelId) {
         [this.analysisTemplates, this.analysisDefinitions] = await Promise.all([
           fetchAnalysisTemplates(this.selectedSemanticModelId),
@@ -677,18 +730,25 @@ export const useStudioStore = defineStore("studio", {
         this.analysisTemplates = [];
         this.analysisDefinitions = [];
       }
-      if (!this.activeAnalysisRun && this.analysisRuns.length) this.activeAnalysisRun = this.analysisRuns[0];
+      if (!this.activeAnalysisRun || this.activeAnalysisRun.semantic_model_id !== this.selectedSemanticModelId) {
+        this.activeAnalysisRun = this.analysisRuns[0] ?? null;
+      }
     },
-    async runAnalysis(template: AnalysisTemplate, inputValues: Record<string, unknown>) {
+    async runAnalysis(
+      template: AnalysisTemplate,
+      inputValues: Record<string, unknown>,
+      selection: AnalysisTemplateSelection = {},
+    ) {
       if (!this.selectedSemanticModelId || !template.available) return;
       this.activity = "analysis";
       this.error = "";
       try {
-        let definition = this.analysisDefinitions.find(
-          (item) => item.template === template.id && item.semantic_model_id === this.selectedSemanticModelId,
-        );
+        let definition = this.analysisDefinitions.find((item) =>
+          item.template === template.id
+          && item.semantic_model_id === this.selectedSemanticModelId
+          && definitionMatches(item, selection));
         if (!definition) {
-          definition = await createAnalysisFromTemplate(this.selectedSemanticModelId, template.id);
+          definition = await createAnalysisFromTemplate(this.selectedSemanticModelId, template.id, selection);
           this.analysisDefinitions.unshift(definition);
         }
         this.activeAnalysisRun = await startAnalysisRun(definition.id, inputValues);
@@ -749,4 +809,22 @@ function message(error: unknown): string {
 
 function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+}
+
+function definitionMatches(definition: AnalysisDefinition, selection: AnalysisTemplateSelection): boolean {
+  if (!Object.keys(selection).length) return true;
+  const comparison = definition.steps.find((step) => step.type === "period_comparison");
+  const trend = definition.steps.find((step) => step.type === "trend");
+  const decomposition = definition.steps.find((step) => step.type === "metric_decomposition");
+  const slices = definition.steps
+    .filter((step) => step.type === "dimensional_contribution")
+    .map((step) => String(step.dimension));
+  const components = Array.isArray(decomposition?.components)
+    ? decomposition.components.map(String)
+    : [];
+  return (!selection.metric_name || comparison?.metric === selection.metric_name)
+    && (!selection.time_dimension_name || trend?.dimension === selection.time_dimension_name)
+    && (!selection.component_metric_name || components.includes(selection.component_metric_name))
+    && (!selection.slice_dimension_names
+      || selection.slice_dimension_names.every((dimension) => slices.includes(dimension)));
 }

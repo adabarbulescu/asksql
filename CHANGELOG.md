@@ -2,6 +2,21 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.9.0] - 2026-08-08
+
+- Added conservative schema-to-model proposals that inspect metadata only, remain drafts until explicit review, and
+  explain each inferred entity, metric, dimension, and relationship with a confidence level.
+- Added semantic readiness reports with physical-schema validation, workflow eligibility, disconnected-entity
+  warnings, and inspectable read-only checks for nulls, uniqueness, freshness, and relationship cardinality.
+- Generalized Revenue Investigation into Metric Change Investigation so a reviewed Business Model can investigate a
+  selected metric, monthly time dimension, optional component metric, and up to three categorical slices. The
+  revenue-specific workflow remains backward compatible.
+- Expanded the built-in demo across comparable periods and categorical dimensions, and provisioned its reviewed
+  Business Model so the governed analysis path can be exercised without manual model setup.
+- Added an end-to-end packaged Studio journey from demo provisioning through analysis evidence and HTML export.
+- Unified Python, web, and Tauri release versions under the canonical `pyproject.toml` version, with CI and release-tag
+  gates that fail on manifest or tag drift.
+
 ## [0.8.0] - 2026-08-02
 
 - Added a persistent Analysis Engine with reusable declarative workflows, bounded semantic query plans, immutable
@@ -85,4 +100,5 @@ builds do not require those credentials.
 [0.6.0]: https://github.com/adabarbulescu/asksql/releases/tag/v0.6.0
 [0.7.0]: https://github.com/adabarbulescu/asksql/releases/tag/v0.7.0
 [0.8.0]: https://github.com/adabarbulescu/asksql/releases/tag/v0.8.0
+[0.9.0]: https://github.com/adabarbulescu/asksql/releases/tag/v0.9.0
 [0.2.0]: https://github.com/adabarbulescu/asksql/releases/tag/v0.2.0

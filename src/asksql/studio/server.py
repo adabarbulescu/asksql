@@ -16,10 +16,12 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from asksql import __version__
 from asksql.adapters import adapter_for
 from asksql.analysis import (
     AnalysisError,
     definition_from_payload,
+    metric_change_investigation_definition,
     report_as_html,
     report_as_pdf,
     revenue_investigation_definition,
@@ -50,9 +52,11 @@ from asksql.semantic import (
     resolve_question,
     validate_model,
 )
+from asksql.semantic_bootstrap import infer_semantic_draft, semantic_readiness
+from asksql.semantic_validation import evaluate_validation_queries
 from asksql.service import QueryService
 from asksql.setup import DEFAULT_MODEL, setup_status
-from asksql.sqlite import DEFAULT_LIMIT, DEFAULT_TIMEOUT, MAX_LIMIT, inspect
+from asksql.sqlite import DEFAULT_LIMIT, DEFAULT_TIMEOUT, MAX_LIMIT, db_path, inspect
 from asksql.studio.analysis_jobs import AnalysisManager
 from asksql.studio.jobs import ExecutionManager
 from asksql.studio.writes import WriteIntentError, WriteIntentManager
@@ -126,6 +130,10 @@ class SemanticCompileRequest(BaseModel):
     dimensions: list[dict[str, str | None]] = Field(default_factory=list, max_length=50)
 
 
+class SemanticProposalRequest(BaseModel):
+    connection: str = Field(min_length=1, max_length=100)
+
+
 class AnalysisDefinitionRequest(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     description: str = Field(default="", max_length=2_000)
@@ -139,7 +147,14 @@ class AnalysisDefinitionRequest(BaseModel):
 
 class AnalysisTemplateRequest(BaseModel):
     semantic_model_id: str = Field(min_length=1, max_length=64)
-    template: str = Field(default="revenue_investigation", pattern="^revenue_investigation$")
+    template: str = Field(
+        default="metric_change_investigation",
+        pattern="^(metric_change_investigation|revenue_investigation)$",
+    )
+    metric_name: str | None = Field(default=None, min_length=1, max_length=100)
+    time_dimension_name: str | None = Field(default=None, min_length=1, max_length=100)
+    component_metric_name: str | None = Field(default=None, min_length=1, max_length=100)
+    slice_dimension_names: list[str] | None = Field(default=None, max_length=3)
 
 
 class AnalysisRunRequest(BaseModel):
@@ -260,7 +275,7 @@ def create_app(
     analysis_manager = analyses or AnalysisManager()
     write_intents = writes or WriteIntentManager()
     assets = static_dir or Path(__file__).with_name("static")
-    app = FastAPI(title="AskSQL Studio", version="0.8.0", docs_url=None, redoc_url=None)
+    app = FastAPI(title="AskSQL Studio", version=__version__, docs_url=None, redoc_url=None)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "testserver"])
 
     @app.get("/api/health")
@@ -417,12 +432,58 @@ def create_app(
         except (KeyError, SemanticModelError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    @app.post("/api/semantic-models/propose")
+    def propose_semantic_model(request: SemanticProposalRequest) -> dict[str, object]:
+        profile = _profile(connection_store, request.connection)
+        try:
+            details = adapter_for(profile.url).inspect_details()
+            return _json_payload(
+                infer_semantic_draft(
+                    details.tables,
+                    connection_hint=profile.name,
+                    name=f"{profile.name.title()} business model",
+                ).payload()
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Could not propose semantic model: {exc}") from exc
+
+    @app.post("/api/semantic-models/readiness")
+    def review_semantic_model_readiness(request: SemanticModelRequest) -> dict[str, object]:
+        profile = _profile(connection_store, request.connection_hint)
+        try:
+            adapter = adapter_for(profile.url)
+            readiness = semantic_readiness(request.model_dump(), adapter.inspect_details().tables)
+            return _json_payload(evaluate_validation_queries(adapter, readiness))
+        except (SemanticModelError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Could not evaluate semantic readiness: {exc}") from exc
+
     @app.get("/api/semantic-models/{identifier}")
     def get_semantic_model(identifier: Annotated[str, ApiPath(min_length=1)]) -> dict[str, object]:
         try:
             return workspace_store.get_semantic_model(identifier).payload()
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/api/semantic-models/{identifier}/readiness")
+    def saved_semantic_model_readiness(
+        identifier: Annotated[str, ApiPath(min_length=1)],
+        evaluate: bool = True,
+    ) -> dict[str, object]:
+        try:
+            model = workspace_store.get_semantic_model(identifier)
+            profile = _profile(connection_store, model.connection_hint)
+            adapter = adapter_for(profile.url)
+            readiness = semantic_readiness(_semantic_payload(model), adapter.inspect_details().tables)
+            payload = evaluate_validation_queries(adapter, readiness) if evaluate else readiness.payload()
+            return _json_payload(payload)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (SemanticModelError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Could not evaluate semantic readiness: {exc}") from exc
 
     @app.put("/api/semantic-models/{identifier}")
     def update_semantic_model(
@@ -468,33 +529,47 @@ def create_app(
     ) -> dict[str, object]:
         try:
             model = workspace_store.get_semantic_model(semantic_model_id)
-            definition = revenue_investigation_definition(model)
-            return {
-                "templates": [
-                    {
-                        "id": "revenue_investigation",
-                        "name": definition.name,
-                        "description": definition.description,
-                        "goal": definition.goal,
-                        "available": True,
-                        "estimated_queries": _estimated_analysis_queries(definition.steps),
-                    }
-                ]
-            }
-        except (KeyError, AnalysisError) as exc:
-            return {
-                "templates": [
-                    {
-                        "id": "revenue_investigation",
-                        "name": "Revenue Investigation",
-                        "description": "Explain revenue change through measurable drivers.",
-                        "goal": "Explain why revenue changed between two comparable periods.",
-                        "available": False,
-                        "unavailable_reason": str(exc),
-                        "estimated_queries": 0,
-                    }
-                ]
-            }
+            profile = _profile(connection_store, model.connection_hint)
+            adapter = adapter_for(profile.url)
+            readiness = semantic_readiness(_semantic_payload(model), adapter.inspect_details().tables)
+            generic = next(item for item in readiness.workflows if item.workflow == "metric_change_investigation")
+            fields = _metric_change_template_fields(model, generic)
+            templates: list[dict[str, object]] = []
+            if generic.eligible:
+                definition = metric_change_investigation_definition(
+                    model,
+                    metric_name=generic.compatible_metrics[0],
+                    time_dimension_name=generic.compatible_time_dimensions[0],
+                )
+                templates.append(_template_payload(definition, fields=fields))
+            else:
+                templates.append(
+                    _unavailable_template(
+                        "metric_change_investigation",
+                        "Metric Change Investigation",
+                        "Explain change in any reviewed metric through measurable drivers.",
+                        "Explain why a selected metric changed between comparable periods.",
+                        "; ".join(generic.missing),
+                        fields=fields,
+                    )
+                )
+            try:
+                templates.append(_template_payload(revenue_investigation_definition(model)))
+            except AnalysisError as exc:
+                templates.append(
+                    _unavailable_template(
+                        "revenue_investigation",
+                        "Revenue Investigation",
+                        "Explain revenue change through measurable drivers.",
+                        "Explain why revenue changed between two comparable periods.",
+                        str(exc),
+                    )
+                )
+            return {"templates": templates}
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Could not inspect analysis templates: {exc}") from exc
 
     @app.get("/api/analysis-definitions")
     def list_analysis_definitions(
@@ -518,10 +593,28 @@ def create_app(
     @app.post("/api/analysis-definitions/from-template", status_code=201)
     def create_analysis_from_template(request: AnalysisTemplateRequest) -> dict[str, object]:
         try:
-            if request.template != "revenue_investigation":
-                raise AnalysisError(f"unknown analysis template: {request.template}")
             model = workspace_store.get_semantic_model(request.semantic_model_id)
-            definition = revenue_investigation_definition(model)
+            profile = _profile(connection_store, model.connection_hint)
+            readiness = semantic_readiness(_semantic_payload(model), adapter_for(profile.url).inspect_details().tables)
+            workflow = next(item for item in readiness.workflows if item.workflow == request.template)
+            if not workflow.eligible:
+                raise AnalysisError("; ".join(workflow.missing))
+            if request.template == "revenue_investigation":
+                definition = revenue_investigation_definition(model)
+            else:
+                metric_name = request.metric_name or workflow.compatible_metrics[0]
+                time_dimension_name = request.time_dimension_name or workflow.compatible_time_dimensions[0]
+                if metric_name not in workflow.compatible_metrics:
+                    raise AnalysisError(f"metric is not eligible for this workflow: {metric_name}")
+                if time_dimension_name not in workflow.compatible_time_dimensions:
+                    raise AnalysisError(f"time dimension is not eligible for this workflow: {time_dimension_name}")
+                definition = metric_change_investigation_definition(
+                    model,
+                    metric_name=metric_name,
+                    time_dimension_name=time_dimension_name,
+                    component_metric_name=request.component_metric_name,
+                    slice_dimension_names=request.slice_dimension_names,
+                )
             return workspace_store.create_analysis_definition(_definition_create_payload(definition)).payload()
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -555,8 +648,14 @@ def create_app(
         return Response(status_code=204)
 
     @app.get("/api/analysis-runs")
-    def list_analysis_runs(limit: Annotated[int, Query(ge=1, le=500)] = 100) -> dict[str, object]:
-        return {"analysisRuns": [item.payload() for item in workspace_store.analysis_runs(limit)]}
+    def list_analysis_runs(
+        limit: Annotated[int, Query(ge=1, le=500)] = 100,
+        semantic_model_id: Annotated[str | None, Query(max_length=64)] = None,
+    ) -> dict[str, object]:
+        runs = workspace_store.analysis_runs(500 if semantic_model_id else limit)
+        if semantic_model_id:
+            runs = [item for item in runs if item.semantic_model_id == semantic_model_id][:limit]
+        return {"analysisRuns": [item.payload() for item in runs]}
 
     @app.post("/api/analysis-runs", status_code=202)
     def start_analysis_run(request: AnalysisRunRequest) -> dict[str, object]:
@@ -564,12 +663,34 @@ def create_app(
             definition = workspace_store.get_analysis_definition(request.definition_id)
             model = workspace_store.get_semantic_model(definition.semantic_model_id)
             profile = _profile(connection_store, model.connection_hint)
+            adapter = adapter_for(profile.url)
+            readiness = semantic_readiness(_semantic_payload(model), adapter.inspect_details().tables)
+            preflight = evaluate_validation_queries(adapter, readiness)
+            required_workflow = (
+                "revenue_investigation"
+                if definition.template == "revenue_investigation"
+                else "metric_change_investigation"
+            )
+            workflow = next(item for item in readiness.workflows if item.workflow == required_workflow)
+            validation_results_raw = preflight.get("validation_results", [])
+            validation_results = validation_results_raw if isinstance(validation_results_raw, list) else []
+            if not preflight["ready"] or not workflow.eligible:
+                reasons = list(workflow.missing)
+                failed_checks = [
+                    f"{item.get('title', 'Semantic trust check')}: "
+                    f"{item.get('message', 'Semantic trust check failed.')}"
+                    for item in validation_results
+                    if isinstance(item, dict) and item.get("severity") == "error" and item.get("status") != "passed"
+                ]
+                raise AnalysisError("Semantic model is not ready for analysis: " + "; ".join(reasons + failed_checks))
+            input_values = dict(request.input_values)
+            input_values["_trust_checks"] = validation_results
             if request.parent_run_id:
                 workspace_store.get_analysis_run(request.parent_run_id)
             run = workspace_store.create_analysis_run(
                 definition,
                 model.payload(),
-                request.input_values,
+                input_values,
                 parent_run_id=request.parent_run_id,
             )
 
@@ -592,7 +713,7 @@ def create_app(
                 QueryService(profile.url),
                 definition,
                 model,
-                request.input_values,
+                input_values,
                 progress=progress,
                 completed=completed,
                 failed=failed,
@@ -693,16 +814,22 @@ def create_app(
 
     @app.post("/api/connections/demo")
     def add_demo_connection() -> dict[str, str]:
+        demo_path = connection_store.path.parent / "demo.db"
         try:
             profile = connection_store.get("demo")
-            inspect(profile.url)
+            if not _demo_schema_ready(profile.url):
+                create_demo_db(demo_path)
+                if db_path(profile.url).resolve() != demo_path.resolve():
+                    connection_store.remove("demo")
+                    profile = connection_store.add("demo", f"sqlite://{demo_path}")
+            _ensure_demo_semantic_model(workspace_store)
             return _profile_payload(profile)
         except ConnectionStoreError:
             pass
         except Exception:
             connection_store.remove("demo")
-        demo_path = connection_store.path.parent / "demo.db"
         profile = connection_store.add("demo", create_demo_db(demo_path))
+        _ensure_demo_semantic_model(workspace_store)
         return _profile_payload(profile)
 
     @app.put("/api/connections/{name}")
@@ -1123,6 +1250,170 @@ def _definition_create_payload(definition: Any) -> dict[str, object]:
     for key in ("id", "created_at", "updated_at"):
         payload.pop(key, None)
     return payload
+
+
+def _semantic_payload(model: SemanticModel) -> dict[str, object]:
+    """Return the persisted model in the list-based public JSON contract."""
+    return _json_payload(model.payload())
+
+
+def _json_payload(payload: Any) -> Any:
+    return json.loads(json.dumps(payload))
+
+
+def _template_payload(definition: Any, *, fields: dict[str, object] | None = None) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "id": definition.template,
+        "name": definition.name,
+        "description": definition.description,
+        "goal": definition.goal,
+        "available": True,
+        "estimated_queries": _estimated_analysis_queries(definition.steps),
+    }
+    if fields is not None:
+        payload["fields"] = fields
+    return payload
+
+
+def _unavailable_template(
+    identifier: str,
+    name: str,
+    description: str,
+    goal: str,
+    reason: str,
+    *,
+    fields: dict[str, object] | None = None,
+) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "id": identifier,
+        "name": name,
+        "description": description,
+        "goal": goal,
+        "available": False,
+        "unavailable_reason": reason,
+        "estimated_queries": 0,
+    }
+    if fields is not None:
+        payload["fields"] = fields
+    return payload
+
+
+def _metric_change_template_fields(model: SemanticModel, workflow: Any) -> dict[str, object]:
+    metric_names = set(workflow.compatible_metrics)
+    time_names = set(workflow.compatible_time_dimensions)
+    metric_options = [{"value": item.name, "label": item.label} for item in model.metrics if item.name in metric_names]
+    time_options = [{"value": item.name, "label": item.label} for item in model.dimensions if item.name in time_names]
+    slice_options = [
+        {"value": item.name, "label": item.label} for item in model.dimensions if not item.time_granularities
+    ]
+    return {
+        "metric_name": {"required": True, "options": metric_options},
+        "time_dimension_name": {"required": True, "options": time_options},
+        "component_metric_name": {"required": False, "options": metric_options},
+        "slice_dimension_names": {"required": False, "multiple": True, "max_items": 3, "options": slice_options},
+    }
+
+
+def _ensure_demo_semantic_model(workspace: WorkspaceStore) -> None:
+    if any(item.name == "AskSQL Demo business model" for item in workspace.semantic_models("demo")):
+        return
+    workspace.create_semantic_model(
+        {
+            "name": "AskSQL Demo business model",
+            "description": "Curated and reviewed definitions for the built-in commerce demo.",
+            "connection_hint": "demo",
+            "entities": [
+                {
+                    "name": "orders",
+                    "source_table": "orders",
+                    "primary_key": "id",
+                    "description": "One row per demo order.",
+                },
+                {
+                    "name": "customers",
+                    "source_table": "customers",
+                    "primary_key": "id",
+                    "description": "One row per demo customer.",
+                },
+            ],
+            "metrics": [
+                {
+                    "name": "revenue",
+                    "label": "Revenue",
+                    "description": "Completed order value.",
+                    "entity": "orders",
+                    "aggregation": "sum",
+                    "expression": "total",
+                    "filters": [{"column": "status", "operator": "eq", "value": "completed"}],
+                    "format": "currency",
+                },
+                {
+                    "name": "orders_count",
+                    "label": "Orders",
+                    "description": "Distinct completed orders.",
+                    "entity": "orders",
+                    "aggregation": "count_distinct",
+                    "expression": "id",
+                    "filters": [{"column": "status", "operator": "eq", "value": "completed"}],
+                    "format": "integer",
+                },
+            ],
+            "dimensions": [
+                {
+                    "name": "order_date",
+                    "label": "Order date",
+                    "description": "Date the order was created.",
+                    "entity": "orders",
+                    "expression": "created_at",
+                    "data_type": "datetime",
+                    "time_granularities": ["day", "week", "month", "quarter", "year"],
+                },
+                {
+                    "name": "channel",
+                    "label": "Channel",
+                    "description": "Order acquisition channel.",
+                    "entity": "orders",
+                    "expression": "channel",
+                    "data_type": "text",
+                    "time_granularities": [],
+                },
+                {
+                    "name": "customer_name",
+                    "label": "Customer",
+                    "description": "Customer display name.",
+                    "entity": "customers",
+                    "expression": "name",
+                    "data_type": "text",
+                    "time_granularities": [],
+                },
+            ],
+            "relationships": [
+                {
+                    "name": "orders_to_customers",
+                    "from_entity": "orders",
+                    "to_entity": "customers",
+                    "from_column": "customer_id",
+                    "to_column": "id",
+                    "join_type": "left",
+                    "cardinality": "many_to_one",
+                }
+            ],
+        }
+    )
+
+
+def _demo_schema_ready(url: str) -> bool:
+    try:
+        tables = inspect(url)
+    except Exception:
+        return False
+    orders = tables.get("orders")
+    customers = tables.get("customers")
+    if orders is None or customers is None:
+        return False
+    return {"id", "customer_id", "total", "status", "channel", "created_at"} <= {
+        column.name for column in orders.columns
+    } and {"id", "name", "email", "created_at"} <= {column.name for column in customers.columns}
 
 
 def _estimated_analysis_queries(steps: tuple[dict[str, object], ...]) -> int:

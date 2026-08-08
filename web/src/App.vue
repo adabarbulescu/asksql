@@ -207,7 +207,7 @@ async function useDemo() {
         </div>
       </section>
 
-      <AnalysisWorkspace v-else-if="workspaceMode === 'analysis'" @open-sql="workspaceMode = 'sql'" />
+      <AnalysisWorkspace v-else-if="workspaceMode === 'analysis'" @open-sql="workspaceMode = 'sql'" @open-model="businessModelDialog = true" />
 
       <section v-else class="main-panel">
         <nav class="query-tabs" aria-label="Open queries">
@@ -233,7 +233,7 @@ async function useDemo() {
           </div>
           <div v-if="studio.semanticModels.length" class="semantic-context-bar">
             <span>◇ Semantic model</span>
-            <select v-model="studio.selectedSemanticModelId">
+            <select v-model="studio.selectedSemanticModelId" @change="studio.loadAnalysisLibrary()">
               <option value="">Disabled</option>
               <option v-for="model in studio.semanticModels" :key="model.id" :value="model.id">{{ model.name }}</option>
             </select>

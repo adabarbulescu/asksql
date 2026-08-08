@@ -1,6 +1,6 @@
 import { createPinia, setActivePinia } from "pinia";
 import { mount } from "@vue/test-utils";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useStudioStore } from "../stores/studio";
 import AnalysisWorkspace from "./AnalysisWorkspace.vue";
@@ -40,5 +40,47 @@ describe("AnalysisWorkspace", () => {
     expect(wrapper.text()).toContain("Deterministic comparisons, not generated assertions");
     expect(wrapper.text()).toContain("select sum(total)");
     expect(wrapper.text()).toContain("Export PDF");
+  });
+
+  it("submits reviewed metric and time selections to the generic workflow", async () => {
+    const studio = useStudioStore();
+    studio.selectedSemanticModelId = "model";
+    studio.semanticModels = [{
+      id: "model", name: "Commerce", description: "", connection_hint: "local",
+      entities: [{ name: "orders", source_table: "orders", primary_key: "id", description: "" }],
+      metrics: [
+        { name: "revenue", label: "Revenue", description: "", entity: "orders", aggregation: "sum",
+          expression: "total", filters: [], format: "currency" },
+        { name: "orders", label: "Orders", description: "", entity: "orders", aggregation: "count",
+          expression: "id", filters: [], format: "number" },
+      ],
+      dimensions: [
+        { name: "order_date", label: "Order date", description: "", entity: "orders", expression: "created_at",
+          data_type: "datetime", time_granularities: ["month"] },
+        { name: "country", label: "Country", description: "", entity: "orders", expression: "country",
+          data_type: "text", time_granularities: [] },
+      ],
+      relationships: [], created_at: "", updated_at: "",
+    }];
+    const template = { id: "metric_change_investigation", name: "Metric Change Investigation",
+      description: "Explain metric change", goal: "Explain change", available: true, estimated_queries: 8 };
+    studio.analysisTemplates = [template];
+    const run = vi.spyOn(studio, "runAnalysis").mockResolvedValue();
+
+    const wrapper = mount(AnalysisWorkspace);
+    await wrapper.find(".analysis-template-card .primary-button").trigger("click");
+    const selects = wrapper.findAll(".analysis-definition-form select");
+    await selects[0].setValue("revenue");
+    await selects[1].setValue("order_date");
+    await selects[2].setValue("orders");
+    await wrapper.find('.slice-picker input[type="checkbox"]').setValue(true);
+    await wrapper.find(".analysis-period-form").trigger("submit");
+
+    expect(run).toHaveBeenCalledOnce();
+    expect(run.mock.calls[0][0]).toEqual(template);
+    expect(run.mock.calls[0][2]).toEqual({
+      metric_name: "revenue", time_dimension_name: "order_date",
+      component_metric_name: "orders", slice_dimension_names: ["country"],
+    });
   });
 });

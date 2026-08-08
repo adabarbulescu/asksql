@@ -90,32 +90,55 @@ def definition_from_payload(
     return definition
 
 
-def revenue_investigation_definition(model: SemanticModel, *, identifier: str = "") -> AnalysisDefinition:
-    revenue = _find_metric(model, ("revenue", "sales", "income"))
-    time_dimension = next((item for item in model.dimensions if "month" in item.time_granularities), None)
-    if revenue is None or time_dimension is None:
-        raise AnalysisError("Revenue Investigation requires a revenue-like metric and a monthly time dimension")
-    orders = _find_metric(model, ("orders", "order_count", "completed_orders"))
-    slices = [item for item in model.dimensions if item.name != time_dimension.name and not item.time_granularities][:3]
+def metric_change_investigation_definition(
+    model: SemanticModel,
+    *,
+    metric_name: str,
+    time_dimension_name: str | None = None,
+    component_metric_name: str | None = None,
+    slice_dimension_names: Sequence[str] | None = None,
+    identifier: str = "",
+    template: str = "metric_change_investigation",
+    name: str | None = None,
+) -> AnalysisDefinition:
+    metric = _metric(model, metric_name)
+    time_dimension = (
+        _dimension(model, time_dimension_name)
+        if time_dimension_name
+        else next((item for item in model.dimensions if "month" in item.time_granularities), None)
+    )
+    if time_dimension is None or "month" not in time_dimension.time_granularities:
+        raise AnalysisError("Metric Change Investigation requires a monthly time dimension")
+    component = _metric(model, component_metric_name) if component_metric_name else None
+    if slice_dimension_names is None:
+        slices = [
+            item for item in model.dimensions if item.name != time_dimension.name and not item.time_granularities
+        ][:3]
+    else:
+        if len(slice_dimension_names) > 3:
+            raise AnalysisError("Metric Change Investigation supports at most three slice dimensions")
+        slices = [_dimension(model, dimension_name) for dimension_name in slice_dimension_names]
+        if any(item.name == time_dimension.name or item.time_granularities for item in slices):
+            raise AnalysisError("slice dimensions cannot be time dimensions")
     steps: list[dict[str, object]] = [
-        {"id": "revenue_change", "type": "period_comparison", "metric": revenue.name, "depends_on": []},
+        {"id": "metric_change", "type": "period_comparison", "metric": metric.name, "depends_on": []},
         {
-            "id": "revenue_trend",
+            "id": "metric_trend",
             "type": "trend",
-            "metric": revenue.name,
+            "metric": metric.name,
             "dimension": time_dimension.name,
             "grain": "month",
-            "depends_on": ["revenue_change"],
+            "depends_on": ["metric_change"],
         },
     ]
-    if orders:
+    if component:
         steps.append(
             {
                 "id": "metric_decomposition",
                 "type": "metric_decomposition",
-                "metric": revenue.name,
-                "components": [orders.name],
-                "depends_on": ["revenue_change"],
+                "metric": metric.name,
+                "components": [component.name],
+                "depends_on": ["metric_change"],
             }
         )
     for dimension in slices:
@@ -123,17 +146,18 @@ def revenue_investigation_definition(model: SemanticModel, *, identifier: str = 
             {
                 "id": f"{dimension.name}_contribution",
                 "type": "dimensional_contribution",
-                "metric": revenue.name,
+                "metric": metric.name,
                 "dimension": dimension.name,
                 "top_n": 10,
-                "depends_on": ["revenue_change"],
+                "depends_on": ["metric_change"],
             }
         )
+    analysis_name = name or f"{metric.label} Change Investigation"
     payload: dict[str, object] = {
-        "name": "Revenue Investigation",
-        "description": "Explain revenue change through metric decomposition and dimensional contributions.",
-        "template": "revenue_investigation",
-        "goal": "Explain why revenue changed between two comparable periods.",
+        "name": analysis_name,
+        "description": f"Explain {metric.label} change through metric decomposition and dimensional contributions.",
+        "template": template,
+        "goal": f"Explain why {metric.label} changed between two comparable periods.",
         "semantic_model_id": model.id,
         "inputs": [
             {"name": "current_start", "type": "date", "required": True},
@@ -145,6 +169,24 @@ def revenue_investigation_definition(model: SemanticModel, *, identifier: str = 
         "outputs": ["executive_summary", "findings", "charts", "evidence", "follow_up_actions"],
     }
     return definition_from_payload(payload, identifier=identifier)
+
+
+def revenue_investigation_definition(model: SemanticModel, *, identifier: str = "") -> AnalysisDefinition:
+    """Build the v0.8 Revenue template using the generic metric investigation engine."""
+    revenue = _find_metric(model, ("revenue", "sales", "income"))
+    time_dimension = next((item for item in model.dimensions if "month" in item.time_granularities), None)
+    if revenue is None or time_dimension is None:
+        raise AnalysisError("Revenue Investigation requires a revenue-like metric and a monthly time dimension")
+    orders = _find_metric(model, ("orders", "order_count", "completed_orders"))
+    return metric_change_investigation_definition(
+        model,
+        metric_name=revenue.name,
+        time_dimension_name=time_dimension.name,
+        component_metric_name=orders.name if orders else None,
+        identifier=identifier,
+        template="revenue_investigation",
+        name="Revenue Investigation",
+    )
 
 
 def plan_analysis(
@@ -196,10 +238,11 @@ def plan_analysis(
         elif kind == "trend":
             dimension = str(step.get("dimension", ""))
             grain = str(step.get("grain", "month"))
+            metric_label = _metric(model, metric).label
             planned.append(
                 _planned(
                     identifier,
-                    "Revenue trend",
+                    f"{metric_label} trend",
                     kind,
                     model,
                     [metric],
@@ -214,11 +257,12 @@ def plan_analysis(
                 raise AnalysisError(f"invalid components for step {identifier}")
             for component in components:
                 name = str(component)
+                component_label = _metric(model, name).label
                 planned.extend(
                     [
                         _planned(
                             f"{identifier}.{name}.current",
-                            f"Current {name}",
+                            f"Current {component_label}",
                             kind,
                             model,
                             [name],
@@ -228,7 +272,7 @@ def plan_analysis(
                         ),
                         _planned(
                             f"{identifier}.{name}.previous",
-                            f"Previous {name}",
+                            f"Previous {component_label}",
                             kind,
                             model,
                             [name],
@@ -240,11 +284,12 @@ def plan_analysis(
                 )
         elif kind == "dimensional_contribution":
             dimension = str(step.get("dimension", ""))
+            dimension_label = _dimension(model, dimension).label
             planned.extend(
                 [
                     _planned(
                         f"{identifier}.current",
-                        f"Current by {dimension}",
+                        f"Current by {dimension_label}",
                         kind,
                         model,
                         [metric],
@@ -254,7 +299,7 @@ def plan_analysis(
                     ),
                     _planned(
                         f"{identifier}.previous",
-                        f"Previous by {dimension}",
+                        f"Previous by {dimension_label}",
                         kind,
                         model,
                         [metric],
@@ -392,106 +437,141 @@ def _diagnose(
     inputs: Mapping[str, object],
     evidence: Sequence[dict[str, object]],
 ) -> tuple[list[dict[str, object]], list[dict[str, object]], dict[str, object]]:
-    del model
     successful = [item for item in evidence if item.get("status") == "succeeded"]
     by_step = {str(item["step_id"]): item for item in successful}
     findings: list[dict[str, object]] = []
     charts: list[dict[str, object]] = []
-    current = _single_metric(by_step.get("revenue_change.current"))
-    previous = _single_metric(by_step.get("revenue_change.previous"))
-    if current is not None and previous is not None:
+    comparison_step = next((item for item in definition.steps if item.get("type") == "period_comparison"), None)
+    metric_name = str(comparison_step.get("metric", "")) if comparison_step else ""
+    metric_label = _metric(model, metric_name).label if metric_name else "Metric"
+    comparison_id = str(comparison_step.get("id", "")) if comparison_step else ""
+    current_item = by_step.get(f"{comparison_id}.current")
+    previous_item = by_step.get(f"{comparison_id}.previous")
+    current = _single_metric(current_item)
+    previous = _single_metric(previous_item)
+    overall_delta: float | None = None
+    if current_item is not None and previous_item is not None and current is not None and previous is not None:
         delta = current - previous
+        overall_delta = delta
         percent = delta / abs(previous) * 100 if previous else None
         direction = "increased" if delta > 0 else "decreased" if delta < 0 else "was unchanged"
         claim = (
-            f"Revenue {direction} by {_format_percent(abs(percent))}."
+            f"{metric_label} {direction} by {_format_percent(abs(percent))}."
             if percent is not None
-            else f"Revenue {direction}."
+            else f"{metric_label} {direction}."
         )
         findings.append(
             _finding(
-                "revenue_change",
-                "Revenue change",
+                comparison_id,
+                f"{metric_label} change",
                 claim,
                 delta,
                 direction,
-                [by_step["revenue_change.current"]["id"], by_step["revenue_change.previous"]["id"]],
+                [current_item["id"], previous_item["id"]],
             )
         )
-    trend = by_step.get("revenue_trend")
-    if trend:
-        chart = _chart_from_evidence(trend, "line", "Revenue trend")
+    for step in (item for item in definition.steps if item.get("type") == "trend"):
+        trend = by_step.get(str(step.get("id", "")))
+        if not trend:
+            continue
+        trend_metric = _metric(model, str(step.get("metric", metric_name))).label
+        chart = _chart_from_evidence(trend, "line", f"{trend_metric} trend")
         if chart:
             charts.append(chart)
-    for step_id in sorted(
-        {key.rsplit(".", 1)[0] for key in by_step if key.endswith(".current") and "contribution" in key}
-    ):
+    contribution_steps = sorted(
+        (item for item in definition.steps if item.get("type") == "dimensional_contribution"),
+        key=lambda item: str(item.get("id", "")),
+    )
+    for step in contribution_steps:
+        step_id = str(step.get("id", ""))
         current_item, previous_item = by_step.get(f"{step_id}.current"), by_step.get(f"{step_id}.previous")
         if not current_item or not previous_item:
             continue
-        contributions = _contributions(current_item, previous_item)
+        raw_top_n = step.get("top_n", 10)
+        top_n = raw_top_n if isinstance(raw_top_n, int) and not isinstance(raw_top_n, bool) else 10
+        contributions = _contributions(current_item, previous_item)[:top_n]
         if not contributions:
             continue
-        dimension = step_id.removesuffix("_contribution")
+        dimension = str(step.get("dimension", ""))
+        dimension_label = _dimension(model, dimension).label
+        contribution_metric = _metric(model, str(step.get("metric", metric_name))).label
         chart = {
             "id": uuid.uuid4().hex,
             "type": "bar",
-            "title": f"Revenue contribution by {dimension}",
-            "labels": [str(item[0]) for item in contributions[:10]],
-            "series": [{"name": "Contribution", "values": [item[1] for item in contributions[:10]]}],
+            "title": f"{contribution_metric} contribution by {dimension_label}",
+            "labels": [str(item[0]) for item in contributions],
+            "series": [{"name": "Contribution", "values": [item[1] for item in contributions]}],
             "evidence_ids": [current_item["id"], previous_item["id"]],
         }
         charts.append(chart)
-        driver, contribution = min(contributions, key=lambda item: item[1])
-        if contribution < 0:
+        aligned = [item for item in contributions if overall_delta is not None and item[1] * overall_delta > 0]
+        if aligned:
+            driver, contribution = max(aligned, key=lambda item: abs(item[1]))
+            direction = "increase" if contribution > 0 else "decline"
             findings.append(
                 _finding(
                     f"{step_id}.driver",
-                    f"{dimension.title()} driver",
-                    f"{driver} contributed {_format_number(contribution)} to the revenue decline.",
+                    f"{dimension_label} driver",
+                    f"{driver} contributed {_format_number(contribution)} to the {contribution_metric} {direction}.",
                     contribution,
-                    "decreased",
+                    "increased" if contribution > 0 else "decreased",
                     [current_item["id"], previous_item["id"]],
                     {"definition_id": definition.id, "scope_filters": [{"dimension": dimension, "value": driver}]},
                 )
             )
-    orders_current = next(
-        (
-            _single_metric(item)
-            for key, item in by_step.items()
-            if key.startswith("metric_decomposition.") and key.endswith(".current")
-        ),
-        None,
-    )
-    orders_previous = next(
-        (
-            _single_metric(item)
-            for key, item in by_step.items()
-            if key.startswith("metric_decomposition.") and key.endswith(".previous")
-        ),
-        None,
-    )
-    if None not in (current, previous, orders_current, orders_previous) and orders_current and orders_previous:
-        aov_current = current / orders_current  # type: ignore[operator]
-        aov_previous = previous / orders_previous  # type: ignore[operator]
-        order_change = (orders_current - orders_previous) / abs(orders_previous) * 100
-        aov_change = (aov_current - aov_previous) / abs(aov_previous) * 100 if aov_previous else 0
-        dominant = "order volume" if abs(order_change) >= abs(aov_change) else "average order value"
-        findings.append(
-            _finding(
-                "metric_decomposition",
-                "Metric decomposition",
-                f"The larger measurable driver was {dominant}: "
-                f"orders changed {_format_signed_percent(order_change)}, "
-                f"while AOV changed {_format_signed_percent(aov_change)}.",
-                max(abs(order_change), abs(aov_change)),
-                "mixed",
-                [item["id"] for key, item in by_step.items() if key.startswith("metric_decomposition.")],
+    for step in (item for item in definition.steps if item.get("type") == "metric_decomposition"):
+        step_id = str(step.get("id", ""))
+        components = step.get("components", [])
+        if not isinstance(components, list):
+            continue
+        for component_name_raw in components:
+            component_name = str(component_name_raw)
+            component_current_item = by_step.get(f"{step_id}.{component_name}.current")
+            component_previous_item = by_step.get(f"{step_id}.{component_name}.previous")
+            component_current = _single_metric(component_current_item)
+            component_previous = _single_metric(component_previous_item)
+            if (
+                None in (current, previous, component_current, component_previous)
+                or not component_current
+                or not component_previous
+            ):
+                continue
+            value_per_component_current = current / component_current  # type: ignore[operator]
+            value_per_component_previous = previous / component_previous  # type: ignore[operator]
+            component_change = (component_current - component_previous) / abs(component_previous) * 100
+            ratio_change = (
+                (value_per_component_current - value_per_component_previous) / abs(value_per_component_previous) * 100
+                if value_per_component_previous
+                else 0
             )
-        )
+            component_label = _metric(model, component_name).label
+            ratio_label = f"{metric_label} per {component_label}"
+            dominant = component_label if abs(component_change) >= abs(ratio_change) else ratio_label
+            evidence_ids = [
+                item["id"] for item in (component_current_item, component_previous_item) if item is not None
+            ]
+            findings.append(
+                _finding(
+                    f"{step_id}.{component_name}",
+                    "Metric decomposition",
+                    f"The larger measurable driver was {dominant}: "
+                    f"{component_label} changed {_format_signed_percent(component_change)}, "
+                    f"while {ratio_label} changed {_format_signed_percent(ratio_change)}.",
+                    max(abs(component_change), abs(ratio_change)),
+                    "mixed",
+                    evidence_ids,
+                )
+            )
     coverage = len(successful) / len(evidence) if evidence else 0
     completeness = sum(not item.get("quality_flags") for item in successful) / len(successful) if successful else 0
-    confidence_score = round(100 * (0.65 * coverage + 0.35 * completeness))
+    trust_checks_raw = inputs.get("_trust_checks", [])
+    trust_checks = trust_checks_raw if isinstance(trust_checks_raw, list) else []
+    trust_score = (
+        sum(item.get("status") == "passed" for item in trust_checks if isinstance(item, Mapping)) / len(trust_checks)
+        if trust_checks
+        else 1
+    )
+    confidence_score = round(100 * (0.55 * coverage + 0.25 * completeness + 0.2 * trust_score))
     confidence = "high" if confidence_score >= 85 else "medium" if confidence_score >= 60 else "low"
     headline = findings[0]["claim"] if findings else "The analysis did not produce sufficient evidence."
     summary = " ".join(str(item["claim"]) for item in findings[:4])
@@ -503,6 +583,7 @@ def _diagnose(
         "confidence_basis": {
             "evidence_coverage": round(coverage * 100),
             "data_completeness": round(completeness * 100),
+            "semantic_trust": round(trust_score * 100),
         },
         "current_period": [inputs.get("current_start"), inputs.get("current_end")],
         "comparison_period": [inputs.get("previous_start"), inputs.get("previous_end")],
@@ -577,22 +658,42 @@ def _validate_inputs(definition: AnalysisDefinition, inputs: Mapping[str, object
         name = str(item.get("name", ""))
         if item.get("required") and inputs.get(name) in (None, ""):
             raise AnalysisError(f"analysis input {name} is required")
+    dates: dict[str, date] = {}
     for name in ("current_start", "current_end", "previous_start", "previous_end"):
         try:
-            date.fromisoformat(str(inputs[name]))
+            dates[name] = date.fromisoformat(str(inputs[name]))
         except (KeyError, ValueError) as exc:
             raise AnalysisError(f"analysis input {name} must be an ISO date") from exc
-    if str(inputs["current_start"]) >= str(inputs["current_end"]):
+    if dates["current_start"] >= dates["current_end"]:
         raise AnalysisError("current period start must precede its end")
-    if str(inputs["previous_start"]) >= str(inputs["previous_end"]):
+    if dates["previous_start"] >= dates["previous_end"]:
         raise AnalysisError("previous period start must precede its end")
+    current_days = (dates["current_end"] - dates["current_start"]).days
+    previous_days = (dates["previous_end"] - dates["previous_start"]).days
+    current_months = _complete_month_span(dates["current_start"], dates["current_end"])
+    previous_months = _complete_month_span(dates["previous_start"], dates["previous_end"])
+    comparable_calendar_months = current_months is not None and current_months == previous_months
+    if current_days != previous_days and not comparable_calendar_months:
+        raise AnalysisError("current and comparison periods must have equal durations or matching calendar-month spans")
 
 
 def _validate_definition(definition: AnalysisDefinition) -> None:
     identifiers = [str(item.get("id", "")) for item in definition.steps]
     if any(not identifier for identifier in identifiers) or len(set(identifiers)) != len(identifiers):
         raise AnalysisError("analysis step identifiers must be non-empty and unique")
+    for step in definition.steps:
+        if step.get("type") == "dimensional_contribution":
+            top_n = step.get("top_n", 10)
+            if isinstance(top_n, bool) or not isinstance(top_n, int) or not 1 <= top_n <= 100:
+                raise AnalysisError("dimensional contribution top_n must be an integer between 1 and 100")
     _topological_steps(definition.steps)
+
+
+def _complete_month_span(start: date, end: date) -> int | None:
+    if start.day != 1 or end.day != 1:
+        return None
+    months = (end.year - start.year) * 12 + end.month - start.month
+    return months if months > 0 else None
 
 
 def _topological_steps(steps: Sequence[dict[str, object]]) -> list[dict[str, object]]:
@@ -668,8 +769,7 @@ def _contributions(current: Mapping[str, object], previous: Mapping[str, object]
     keys = set(current_values) | set(previous_values)
     return sorted(
         ((key, current_values.get(key, 0) - previous_values.get(key, 0)) for key in keys),
-        key=lambda item: abs(item[1]),
-        reverse=True,
+        key=lambda item: (-abs(item[1]), str(item[0])),
     )
 
 
@@ -737,6 +837,20 @@ def _find_metric(model: SemanticModel, candidates: Sequence[str]) -> Any:
         if found:
             return found
     return None
+
+
+def _metric(model: SemanticModel, name: str) -> Any:
+    metric = next((item for item in model.metrics if item.name == name), None)
+    if metric is None:
+        raise AnalysisError(f"unknown metric: {name}")
+    return metric
+
+
+def _dimension(model: SemanticModel, name: str) -> Any:
+    dimension = next((item for item in model.dimensions if item.name == name), None)
+    if dimension is None:
+        raise AnalysisError(f"unknown dimension: {name}")
+    return dimension
 
 
 def _object_tuple(value: object, name: str) -> tuple[dict[str, object], ...]:

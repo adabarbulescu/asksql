@@ -41,9 +41,13 @@ asksql setup --check-model
 Run local checks:
 
 ```bash
+python scripts/check_versions.py
 python -m unittest discover -q
 cd web && npm test && npm run build && npm run audit
 ```
+
+`pyproject.toml` is the canonical release version. The version check also covers the Python package, web manifests,
+and both Tauri manifests; release tags must use the matching `vX.Y.Z` form.
 
 For browser e2e tests, install the Playwright browser dependencies once:
 
@@ -71,9 +75,16 @@ native SQLite or PostgreSQL driver binding; parameters marked sensitive are neve
 Business Model editor defines schema-validated entities, metrics, dimensions, default filters, time grains, and
 relationships. Questions that name these objects are resolved into an explicit semantic plan and compiled
 deterministically for SQLite or PostgreSQL; Studio displays the definitions and joins used to produce the SQL.
-Studio opens on the Analysis Engine: choose Revenue Investigation, define two comparable periods, and run a bounded
-semantic workflow instead of writing a prompt or query. The resulting report explains the measured change through
-trend, volume, average order value, and dimension contributions; findings can launch scoped follow-up analyses.
+Studio can propose a Business Model from schema metadata without reading table rows. The proposal remains an
+unpersisted draft until you review it, and readiness checks identify invalid physical references, disconnected
+entities, and workflow requirements, then execute bounded read-only checks for nulls, uniqueness, freshness, and
+relationship cardinality before adoption. The demo connection provisions a reviewed model so the complete governed
+workflow is available immediately.
+Studio opens on the Analysis Engine: choose a compatible metric and monthly time dimension, define two comparable
+periods, and run a bounded Metric Change Investigation instead of writing a prompt or query. The resulting report
+explains the measured change through trend, an optional component metric, and selected dimension contributions.
+Revenue Investigation remains available as the revenue-specific compatibility workflow, and findings can launch
+scoped follow-up analyses.
 Every conclusion links back to an inspectable semantic plan, safely bound SQL, result evidence, timing, and quality
 flags. Analysis definitions, immutable run snapshots, progress, reports, and recent runs persist across restarts, and
 completed reports export to HTML or PDF. The SQL Workbench remains available from the Analysis toolbar.
