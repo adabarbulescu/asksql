@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 import time
 from pathlib import Path
+from typing import Mapping
 from urllib.parse import unquote, urlparse
 
 from asksql.models import (
@@ -139,6 +140,7 @@ def query_result(
     limit: int = DEFAULT_LIMIT,
     timeout: float | None = DEFAULT_TIMEOUT,
     cancellation: CancellationToken | None = None,
+    parameters: Mapping[str, object] | None = None,
 ) -> QueryResult:
     if cancellation and cancellation.cancelled:
         raise QueryCancelledError("query cancelled")
@@ -160,7 +162,7 @@ def query_result(
 
         conn.set_progress_handler(progress, 1000)
         try:
-            cursor = conn.execute(sql)
+            cursor = conn.execute(sql, parameters or {})
             rows = cursor.fetchmany(limit + 1)
             return QueryResult([col[0] for col in cursor.description or []], rows[:limit], len(rows) > limit, limit)
         except sqlite3.OperationalError as exc:
@@ -184,6 +186,7 @@ def execute_write(
     sql: str,
     timeout: float | None = DEFAULT_TIMEOUT,
     cancellation: CancellationToken | None = None,
+    parameters: Mapping[str, object] | None = None,
 ) -> MutationResult:
     """Execute one write statement atomically against an existing SQLite database."""
     if cancellation and cancellation.cancelled:
@@ -207,7 +210,7 @@ def execute_write(
 
         conn.set_progress_handler(progress, 1000)
         try:
-            cursor = conn.execute(sql)
+            cursor = conn.execute(sql, parameters or {})
             if cancellation and cancellation.cancelled:
                 raise QueryCancelledError("query cancelled")
             return MutationResult(max(cursor.rowcount, 0), cursor.lastrowid)

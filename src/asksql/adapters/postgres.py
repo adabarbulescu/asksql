@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from typing import Any, Iterator
+from typing import Any, Iterator, Mapping
 
 from asksql.adapters.base import format_schema
 from asksql.models import (
@@ -17,6 +17,7 @@ from asksql.models import (
     SchemaDetails,
     TableSchema,
 )
+from asksql.parameters import normalize_sql
 
 
 class PostgreSQLAdapter:
@@ -109,10 +110,17 @@ class PostgreSQLAdapter:
             ]
         return SchemaDetails(tables, views, triggers)
 
-    def query(self, sql: str, limit: int, timeout: float | None, cancellation: CancellationToken | None) -> QueryResult:
+    def query(
+        self,
+        sql: str,
+        limit: int,
+        timeout: float | None,
+        cancellation: CancellationToken | None,
+        parameters: Mapping[str, object] | None = None,
+    ) -> QueryResult:
         try:
             with self._connection(read_only=True, timeout=timeout, cancellation=cancellation) as connection:
-                cursor = connection.execute(sql)
+                cursor = connection.execute(normalize_sql(sql, self.dialect), parameters)
                 rows = cursor.fetchmany(limit + 1)
                 columns = [column.name for column in cursor.description or []]
                 return QueryResult(columns, rows[:limit], len(rows) > limit, limit)
@@ -120,10 +128,16 @@ class PostgreSQLAdapter:
             self._translate_error(exc, cancellation, timeout)
             raise
 
-    def execute_write(self, sql: str, timeout: float | None, cancellation: CancellationToken | None) -> MutationResult:
+    def execute_write(
+        self,
+        sql: str,
+        timeout: float | None,
+        cancellation: CancellationToken | None,
+        parameters: Mapping[str, object] | None = None,
+    ) -> MutationResult:
         try:
             with self._connection(read_only=False, timeout=timeout, cancellation=cancellation) as connection:
-                cursor = connection.execute(sql)
+                cursor = connection.execute(normalize_sql(sql, self.dialect), parameters)
                 return MutationResult(max(cursor.rowcount, 0), None)
         except Exception as exc:
             self._translate_error(exc, cancellation, timeout)

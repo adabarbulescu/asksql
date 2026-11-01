@@ -18,6 +18,7 @@ class StudioApiTest(unittest.TestCase):
         self.addCleanup(self.directory.cleanup)
         root = Path(self.directory.name)
         database = root / "studio.db"
+        self.database = database
         with sqlite3.connect(database) as connection:
             connection.execute("create table projects(id integer primary key, name text)")
             connection.execute("insert into projects(name) values ('AskSQL Studio')")
@@ -205,6 +206,355 @@ class StudioApiTest(unittest.TestCase):
         self.assertEqual(found[0]["status"], "succeeded")
         self.assertTrue(pinned["pinned"])
         self.assertEqual(deleted.status_code, 204)
+
+    def test_persistent_query_document_api(self) -> None:
+        created = self.client.post(
+            "/api/workspace/documents",
+            json={"connection": "local", "title": "Revenue analysis", "selected_tables": ["projects"]},
+        )
+        identifier = created.json()["id"]
+        updated = self.client.patch(
+            f"/api/workspace/documents/{identifier}",
+            json={
+                "question": "show projects",
+                "generated_sql": "select * from projects",
+                "edited_sql": "select name from projects",
+                "lifecycle_state": "generated",
+            },
+        )
+        workspace = self.client.patch(
+            "/api/workspace", json={"active_connection": "local", "active_document_id": identifier}
+        )
+
+        self.assertEqual(created.status_code, 201)
+        self.assertEqual(updated.json()["edited_sql"], "select name from projects")
+        self.assertEqual(workspace.json()["activeDocumentId"], identifier)
+        self.assertEqual(self.client.get("/api/workspace").json()["documents"][0]["title"], "Revenue analysis")
+
+    def test_async_execution_updates_query_document_lifecycle(self) -> None:
+        document = self.client.post(
+            "/api/workspace/documents", json={"connection": "local", "title": "Projects"}
+        ).json()
+        started = self.client.post(
+            "/api/query/jobs",
+            json={
+                "connection": "local",
+                "sql": "select name from projects",
+                "document_id": document["id"],
+            },
+        ).json()
+
+        import time
+
+        job = self.client.get(f"/api/query/jobs/{started['jobId']}").json()
+        for _ in range(100):
+            if job["state"] == "completed":
+                break
+            time.sleep(0.01)
+            job = self.client.get(f"/api/query/jobs/{started['jobId']}").json()
+        restored = self.client.get("/api/workspace").json()["documents"][0]
+
+        self.assertEqual(restored["lifecycle_state"], "completed")
+        self.assertEqual(restored["execution_status"], "succeeded")
+        self.assertEqual(restored["result_reference"], started["historyId"])
+
+    def test_saved_query_library_api(self) -> None:
+        document = self.client.post(
+            "/api/workspace/documents", json={"connection": "local", "title": "Projects"}
+        ).json()
+        created = self.client.post(
+            "/api/saved-queries",
+            json={
+                "name": "Project names",
+                "description": "Reusable project lookup",
+                "connection_hint": "local",
+                "natural_language_question": "show project names",
+                "sql": "select name from projects",
+                "schema_context": ["projects"],
+                "tags": ["Lookup", "projects"],
+                "folder": "Operations",
+                "favorite": True,
+                "source_document_id": document["id"],
+            },
+        )
+        identifier = created.json()["id"]
+        found = self.client.get("/api/saved-queries", params={"search": "lookup", "tag": "lookup"}).json()
+        updated = self.client.patch(f"/api/saved-queries/{identifier}", json={"favorite": False}).json()
+        duplicated = self.client.post(f"/api/saved-queries/{identifier}/duplicate", json={}).json()
+        deleted = self.client.delete(f"/api/saved-queries/{identifier}")
+
+        self.assertEqual(created.status_code, 201)
+        self.assertEqual(found["savedQueries"][0]["id"], identifier)
+        self.assertIn("Operations", found["folders"])
+        self.assertFalse(updated["favorite"])
+        self.assertEqual(duplicated["name"], "Project names copy")
+        self.assertEqual(deleted.status_code, 204)
+
+    def test_semantic_model_crud_compile_generate_and_execute(self) -> None:
+        payload = {
+            "name": "Projects business model",
+            "description": "Canonical project metrics",
+            "connection_hint": "local",
+            "entities": [{"name": "projects", "source_table": "projects", "primary_key": "id", "description": ""}],
+            "metrics": [
+                {
+                    "name": "projects_count",
+                    "label": "Projects count",
+                    "description": "Number of projects",
+                    "entity": "projects",
+                    "aggregation": "count_distinct",
+                    "expression": "id",
+                    "filters": [],
+                    "format": "integer",
+                }
+            ],
+            "dimensions": [
+                {
+                    "name": "project",
+                    "label": "Project",
+                    "description": "Project name",
+                    "entity": "projects",
+                    "expression": "name",
+                    "data_type": "text",
+                    "time_granularities": [],
+                }
+            ],
+            "relationships": [],
+        }
+        created = self.client.post("/api/semantic-models", json=payload)
+        identifier = created.json()["id"]
+        compiled = self.client.post(
+            f"/api/semantic-models/{identifier}/compile",
+            json={"connection": "local", "metrics": ["projects_count"], "dimensions": [{"name": "project"}]},
+        )
+        generated = self.client.post(
+            "/api/query/generate",
+            json={
+                "connection": "local",
+                "question": "Show projects count by project",
+                "model": "ollama:not-needed",
+                "semantic_model_id": identifier,
+            },
+        )
+        executed = self.client.post(
+            "/api/query/execute",
+            json={
+                "connection": "local",
+                "sql": generated.json()["sql"],
+                "semantic_model_id": identifier,
+                "semantic_plan": generated.json()["plan"],
+            },
+        )
+
+        self.assertEqual(created.status_code, 201)
+        self.assertIn('count(distinct t0."id")', compiled.json()["sql"])
+        self.assertEqual(generated.json()["generationMode"], "semantic")
+        self.assertEqual(executed.json()["status"], "succeeded")
+        self.assertEqual(executed.json()["result"]["rows"], [["AskSQL Studio", 1]])
+        self.assertEqual(
+            len(self.client.get("/api/semantic-models", params={"connection": "local"}).json()["semanticModels"]), 1
+        )
+
+        payload["description"] = "Updated definitions"
+        updated = self.client.put(f"/api/semantic-models/{identifier}", json=payload)
+        self.assertEqual(updated.json()["description"], "Updated definitions")
+        self.assertEqual(self.client.delete(f"/api/semantic-models/{identifier}").status_code, 204)
+
+    def test_semantic_model_rejects_unknown_physical_columns(self) -> None:
+        response = self.client.post(
+            "/api/semantic-models",
+            json={
+                "name": "Invalid",
+                "connection_hint": "local",
+                "entities": [{"name": "projects", "source_table": "projects", "primary_key": "id", "description": ""}],
+                "metrics": [
+                    {
+                        "name": "revenue",
+                        "label": "Revenue",
+                        "description": "",
+                        "entity": "projects",
+                        "aggregation": "sum",
+                        "expression": "missing_column",
+                        "filters": [],
+                        "format": "number",
+                    }
+                ],
+                "dimensions": [],
+                "relationships": [],
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("unknown column", response.json()["detail"])
+
+    def test_analysis_workflow_runs_reports_exports_and_drills_down(self) -> None:
+        with sqlite3.connect(self.database) as connection:
+            connection.execute(
+                "create table z_orders(id integer primary key, amount real, status text, created_at text, country text)"
+            )
+            connection.executemany(
+                "insert into z_orders(amount, status, created_at, country) values (?, ?, ?, ?)",
+                [
+                    (100, "completed", "2026-07-05", "Germany"),
+                    (50, "completed", "2026-07-15", "France"),
+                    (70, "completed", "2026-08-05", "Germany"),
+                    (70, "completed", "2026-08-15", "France"),
+                ],
+            )
+        model = self.client.post(
+            "/api/semantic-models",
+            json={
+                "name": "Commerce",
+                "connection_hint": "local",
+                "entities": [{"name": "orders", "source_table": "z_orders", "primary_key": "id", "description": ""}],
+                "metrics": [
+                    {
+                        "name": "revenue",
+                        "label": "Revenue",
+                        "description": "",
+                        "entity": "orders",
+                        "aggregation": "sum",
+                        "expression": "amount",
+                        "filters": [{"column": "status", "operator": "eq", "value": "completed"}],
+                        "format": "currency",
+                    },
+                    {
+                        "name": "orders",
+                        "label": "Orders",
+                        "description": "",
+                        "entity": "orders",
+                        "aggregation": "count_distinct",
+                        "expression": "id",
+                        "filters": [{"column": "status", "operator": "eq", "value": "completed"}],
+                        "format": "integer",
+                    },
+                ],
+                "dimensions": [
+                    {
+                        "name": "order_date",
+                        "label": "Order date",
+                        "description": "",
+                        "entity": "orders",
+                        "expression": "created_at",
+                        "data_type": "datetime",
+                        "time_granularities": ["month"],
+                    },
+                    {
+                        "name": "country",
+                        "label": "Country",
+                        "description": "",
+                        "entity": "orders",
+                        "expression": "country",
+                        "data_type": "text",
+                        "time_granularities": [],
+                    },
+                ],
+                "relationships": [],
+            },
+        ).json()
+        template = self.client.get("/api/analysis-templates", params={"semantic_model_id": model["id"]}).json()[
+            "templates"
+        ][0]
+        definition = self.client.post(
+            "/api/analysis-definitions/from-template",
+            json={"semantic_model_id": model["id"], "template": "revenue_investigation"},
+        ).json()
+        started = self.client.post(
+            "/api/analysis-runs",
+            json={
+                "definition_id": definition["id"],
+                "input_values": {
+                    "current_start": "2026-08-01",
+                    "current_end": "2026-09-01",
+                    "previous_start": "2026-07-01",
+                    "previous_end": "2026-08-01",
+                },
+            },
+        ).json()
+
+        import time
+
+        run = started
+        for _ in range(200):
+            run = self.client.get(f"/api/analysis-runs/{started['id']}").json()
+            if run["state"] not in {"planning", "running"}:
+                break
+            time.sleep(0.01)
+
+        self.assertTrue(template["available"])
+        self.assertGreaterEqual(template["estimated_queries"], 5)
+        self.assertEqual(run["state"], "completed")
+        self.assertIn("decreased by 6.7%", run["report"]["headline"])
+        self.assertTrue(run["charts"])
+        self.assertTrue(run["evidence"])
+
+        pdf = self.client.get(f"/api/analysis-runs/{run['id']}/export", params={"format": "pdf"})
+        self.assertEqual(pdf.status_code, 200)
+        self.assertTrue(pdf.text.startswith("%PDF-1.4"))
+
+        driver = next(item for item in run["findings"] if item.get("follow_up_analysis"))
+        follow_up = self.client.post(f"/api/analysis-runs/{run['id']}/follow-up", json={"finding_id": driver["id"]})
+        self.assertEqual(follow_up.status_code, 202)
+        self.assertEqual(follow_up.json()["parent_run_id"], run["id"])
+        for _ in range(200):
+            follow_up_run = self.client.get(f"/api/analysis-runs/{follow_up.json()['id']}").json()
+            if follow_up_run["state"] not in {"planning", "running"}:
+                break
+            time.sleep(0.01)
+        self.assertEqual(follow_up_run["state"], "completed")
+
+    def test_parameterized_saved_query_validates_binds_exports_and_hides_sensitive_values(self) -> None:
+        document = self.client.post(
+            "/api/workspace/documents", json={"connection": "local", "title": "Parameterized"}
+        ).json()
+        saved = self.client.post(
+            "/api/saved-queries",
+            json={
+                "name": "Project by name",
+                "connection_hint": "local",
+                "sql": "select name from projects where name = :name and :secret = :secret",
+                "source_document_id": document["id"],
+                "parameters": [
+                    {"name": "name", "data_type": "text", "required": True, "description": "Project name"},
+                    {"name": "secret", "data_type": "text", "required": True, "sensitive": True},
+                ],
+            },
+        ).json()
+        executed = self.client.post(
+            "/api/query/execute",
+            json={
+                "connection": "local",
+                "sql": saved["sql"],
+                "saved_query_id": saved["id"],
+                "parameter_values": {"name": "AskSQL Studio", "secret": "runtime-only"},
+            },
+        )
+        exported = self.client.post(
+            "/api/query/export",
+            json={
+                "connection": "local",
+                "sql": saved["sql"],
+                "format": "json",
+                "saved_query_id": saved["id"],
+                "parameter_values": {"name": "AskSQL Studio", "secret": "runtime-only"},
+            },
+        )
+        missing = self.client.post(
+            "/api/query/execute",
+            json={"connection": "local", "sql": saved["sql"], "saved_query_id": saved["id"]},
+        )
+        persisted = self.client.patch(
+            f"/api/workspace/documents/{document['id']}",
+            json={
+                "saved_query_id": saved["id"],
+                "parameter_values": {"name": "AskSQL Studio", "secret": "must-not-persist"},
+            },
+        ).json()
+
+        self.assertEqual(executed.json()["result"]["rows"], [["AskSQL Studio"]])
+        self.assertIn("AskSQL Studio", exported.text)
+        self.assertEqual(missing.status_code, 422)
+        self.assertEqual(persisted["parameter_values"], {"name": "AskSQL Studio"})
 
     def test_unknown_connection_is_not_found(self) -> None:
         response = self.client.get("/api/connections/missing/schema")

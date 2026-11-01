@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Mapping, Protocol
 
 from asksql.models import CancellationToken, MutationResult, QueryResult, SchemaDetails
 
@@ -15,11 +15,20 @@ class DatabaseAdapter(Protocol):
     def inspect_details(self) -> SchemaDetails: ...
 
     def query(
-        self, sql: str, limit: int, timeout: float | None, cancellation: CancellationToken | None
+        self,
+        sql: str,
+        limit: int,
+        timeout: float | None,
+        cancellation: CancellationToken | None,
+        parameters: Mapping[str, object] | None = None,
     ) -> QueryResult: ...
 
     def execute_write(
-        self, sql: str, timeout: float | None, cancellation: CancellationToken | None
+        self,
+        sql: str,
+        timeout: float | None,
+        cancellation: CancellationToken | None,
+        parameters: Mapping[str, object] | None = None,
     ) -> MutationResult: ...
 
     def explain(self, sql: str) -> QueryResult: ...

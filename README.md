@@ -60,9 +60,24 @@ Launch AskSQL Studio, the local-first browser workspace:
 asksql ui
 ```
 
-Studio opens on `127.0.0.1` and uses your saved connections. It includes connection management, persistent query
-history, schema search and context selection, natural-language SQL generation, editable SQL review, cancellable
-execution, safe write confirmation, exports, query plans, and a virtualized results grid. The
+Studio opens on `127.0.0.1` and uses your saved connections. Its persistent multi-query workspace restores open
+tabs after restart and preserves each query's connection, schema context, question, generated and edited SQL,
+execution lifecycle, metadata, and result reference. Studio also includes searchable query history, natural-language
+SQL generation, cancellable execution, safe write confirmation, exports, query plans, and a virtualized results grid.
+The Saved Queries Library captures deliberate reusable snapshots independently from session drafts and execution
+history, with folders, tags, favorites, search, duplication, Save as, and opening into a fresh tab. The
+library supports typed `:name` parameters and generates per-tab input forms. Values are passed separately through
+native SQLite or PostgreSQL driver binding; parameters marked sensitive are never written to `workspace.db`. The
+Business Model editor defines schema-validated entities, metrics, dimensions, default filters, time grains, and
+relationships. Questions that name these objects are resolved into an explicit semantic plan and compiled
+deterministically for SQLite or PostgreSQL; Studio displays the definitions and joins used to produce the SQL.
+Studio opens on the Analysis Engine: choose Revenue Investigation, define two comparable periods, and run a bounded
+semantic workflow instead of writing a prompt or query. The resulting report explains the measured change through
+trend, volume, average order value, and dimension contributions; findings can launch scoped follow-up analyses.
+Every conclusion links back to an inspectable semantic plan, safely bound SQL, result evidence, timing, and quality
+flags. Analysis definitions, immutable run snapshots, progress, reports, and recent runs persist across restarts, and
+completed reports export to HTML or PDF. The SQL Workbench remains available from the Analysis toolbar.
+Unmatched questions retain free-form generation while receiving the model's business vocabulary as context. The
 database stays on your machine; model providers receive schema and the question, never result rows.
 
 No terminal setup is required after launch. Studio can register, validate, rename, and remove SQLite or PostgreSQL
@@ -93,7 +108,9 @@ asksql connections remove local
 
 Connection profiles are stored in `$XDG_CONFIG_HOME/asksql/connections.json` (or
 `~/.config/asksql/connections.json`) with private file permissions. Query metadata is kept in a private local
-`workspace.db`; result rows are not persisted. Set `ASKSQL_CONFIG_DIR` to override the directory.
+`workspace.db`. Ordinary SQL result rows are not persisted; completed Analysis runs retain their bounded evidence rows,
+semantic plans, and compiled SQL locally so reports remain auditable after restart. Set `ASKSQL_CONFIG_DIR` to override
+the directory.
 Workspace upgrades keep a private backup before adopting an older unversioned database or refusing a future
 unsupported workspace version.
 

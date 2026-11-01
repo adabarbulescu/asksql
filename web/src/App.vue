@@ -2,29 +2,92 @@
 import { computed, onMounted, ref, watch } from "vue";
 
 import ConnectionDialog from "./components/ConnectionDialog.vue";
+import AnalysisWorkspace from "./components/AnalysisWorkspace.vue";
+import BusinessModelPanel from "./components/BusinessModelPanel.vue";
 import HistoryPanel from "./components/HistoryPanel.vue";
 import ModelDialog from "./components/ModelDialog.vue";
+import ParameterForm from "./components/ParameterForm.vue";
 import ResultsGrid from "./components/ResultsGrid.vue";
 import SchemaTree from "./components/SchemaTree.vue";
+import SavedQueriesPanel from "./components/SavedQueriesPanel.vue";
 import SqlEditor from "./components/SqlEditor.vue";
 import WriteReviewDialog from "./components/WriteReviewDialog.vue";
 import { useStudioStore } from "./stores/studio";
 import type { ConnectionProfile } from "./types";
+import type { SavedQueryParameter, SavedQueryParameterType } from "./types";
 
 const studio = useStudioStore();
+const workspaceMode = ref<"analysis" | "sql">("analysis");
 const activeTab = ref<"results" | "messages">("results");
-const sidebarTab = ref<"connections" | "history">("connections");
+const sidebarTab = ref<"connections" | "history" | "library">("connections");
 const connectionDialog = ref(false);
 const editingConnection = ref<ConnectionProfile>();
 const modelDialog = ref(false);
+const businessModelDialog = ref(false);
 const deletingConnection = ref<ConnectionProfile>();
 const rowCount = computed(() => studio.execution?.result?.rows.length ?? 0);
+const savedForActive = computed(() => studio.savedQueries.find((item) => item.source_document_id === studio.activeDocumentId));
+const question = computed({
+  get: () => studio.activeDocument?.question ?? "",
+  set: (value: string) => {
+    if (!studio.activeDocument) return;
+    studio.activeDocument.question = value;
+    if (studio.activeDocument.lifecycle_state !== "running") studio.activeDocument.lifecycle_state = "draft";
+  },
+});
+const sql = computed({
+  get: () => studio.activeDocument?.edited_sql ?? "",
+  set: (value: string) => {
+    if (!studio.activeDocument) return;
+    studio.activeDocument.edited_sql = value;
+    if (studio.activeDocument.semantic_plan && value !== studio.activeDocument.generated_sql) {
+      studio.activeDocument.semantic_plan = null;
+      studio.activeDocument.semantic_model_id = null;
+      studio.generationMode = "";
+      studio.semanticTrace = [];
+    }
+    if (studio.activeDocument.lifecycle_state !== "running") studio.activeDocument.lifecycle_state = "draft";
+  },
+});
 
 onMounted(() => studio.initialise());
 watch(
-  () => [studio.selectedConnection, studio.question, studio.sql],
+  () => [studio.selectedConnection, question.value, sql.value, studio.selectedTables],
   () => studio.persistDraft(),
+  { deep: true },
 );
+
+async function renameDocument(identifier: string, current: string) {
+  const title = window.prompt("Query name", current)?.trim();
+  if (title && title !== current) await studio.renameDocument(identifier, title);
+}
+
+async function saveQuery(saveAs = false) {
+  if (!studio.activeDocument) return;
+  const existing = saveAs ? undefined : savedForActive.value;
+  const name = window.prompt("Saved query name", existing?.name ?? studio.activeDocument.title)?.trim();
+  if (!name) return;
+  const description = window.prompt("Description", existing?.description ?? "") ?? "";
+  const folder = window.prompt("Folder (optional)", existing?.folder ?? "")?.trim() || undefined;
+  const tags = (window.prompt("Tags, separated by commas", existing?.tags.join(", ") ?? "") ?? "")
+    .split(",").map((tag) => tag.trim()).filter(Boolean);
+  const names = [...sql.value.matchAll(/(?<!:):([A-Za-z_][A-Za-z0-9_]*)/g)].map((match) => match[1])
+    .filter((value, index, values) => values.indexOf(value) === index);
+  const parameters: SavedQueryParameter[] = [];
+  for (const parameterName of names) {
+    const prior = existing?.parameters.find((parameter) => parameter.name === parameterName);
+    const dataType = (window.prompt(
+      `Type for :${parameterName} (text, integer, decimal, boolean, date, datetime)`, prior?.data_type ?? "text",
+    )?.trim() || "text") as SavedQueryParameterType;
+    const defaultValue = window.prompt(`Default value for :${parameterName} (optional)`, String(prior?.default_value ?? ""));
+    const required = window.confirm(`Is :${parameterName} required?`);
+    const sensitive = window.confirm(`Is :${parameterName} sensitive? Sensitive values are never persisted.`);
+    const parameterDescription = window.prompt(`Label or description for :${parameterName}`, prior?.description ?? parameterName) ?? parameterName;
+    parameters.push({ name: parameterName, data_type: dataType, required,
+      default_value: defaultValue || null, description: parameterDescription, sensitive });
+  }
+  await studio.saveActiveQuery({ name, description, folder, tags, parameters }, saveAs);
+}
 
 function openAddConnection() {
   editingConnection.value = undefined;
@@ -76,6 +139,7 @@ async function useDemo() {
           <div class="sidebar-tabs">
             <button :class="{ active: sidebarTab === 'connections' }" @click="sidebarTab = 'connections'">Connections</button>
             <button :class="{ active: sidebarTab === 'history' }" @click="sidebarTab = 'history'; studio.loadHistory()">History</button>
+            <button :class="{ active: sidebarTab === 'library' }" @click="sidebarTab = 'library'; studio.loadSavedQueries()">Library</button>
           </div>
           <div class="heading-actions"><span class="count">{{ studio.connections.length }}</span><button title="Add connection" @click="openAddConnection">＋</button></div>
         </div>
@@ -94,7 +158,8 @@ async function useDemo() {
             <span>◉</span><strong>No connections yet</strong><small>Add an existing database or explore the demo.</small>
           </div>
         </div>
-        <HistoryPanel v-else />
+        <HistoryPanel v-else-if="sidebarTab === 'history'" />
+        <SavedQueriesPanel v-else />
         <div class="local-note"><span>⌂</span><div><strong>Local-first</strong><small>Your data stays on this machine.</small></div></div>
       </aside>
 
@@ -102,6 +167,7 @@ async function useDemo() {
         <div class="panel-heading">
           <span>Schema</span>
           <div class="heading-actions" v-if="studio.selectedProfile">
+            <button title="Business model" @click="businessModelDialog = true">◇</button>
             <button title="Edit connection" @click="openEditConnection">✎</button>
             <button title="Remove connection" @click="deletingConnection = studio.selectedProfile">⌫</button>
             <button title="Refresh schema" @click="studio.selectConnection(studio.selectedConnection)">↻</button>
@@ -137,18 +203,45 @@ async function useDemo() {
           </div>
           <div class="trust-row"><span>✓ Existing files only</span><span>✓ Read-only by default</span><span>✓ No database uploads</span></div>
           <div v-if="studio.error" class="error-banner"><span>!</span>{{ studio.error }}</div>
+          <ParameterForm />
         </div>
       </section>
 
+      <AnalysisWorkspace v-else-if="workspaceMode === 'analysis'" @open-sql="workspaceMode = 'sql'" />
+
       <section v-else class="main-panel">
+        <nav class="query-tabs" aria-label="Open queries">
+          <button class="analysis-return" title="Back to Analysis" @click="workspaceMode = 'analysis'">✦ Analysis</button>
+          <button
+            v-for="document in studio.documents"
+            :key="document.id"
+            :class="['query-tab', { active: document.id === studio.activeDocumentId }]"
+            @click="studio.activateDocument(document.id)"
+            @dblclick="renameDocument(document.id, document.title)"
+          >
+            <span :class="['document-state', document.lifecycle_state]" />
+            <span class="query-tab-title">{{ document.title }}</span>
+            <small>{{ document.connection }}</small>
+            <i title="Close query" @click.stop="studio.closeDocument(document.id)">×</i>
+          </button>
+          <button class="new-query-tab" title="New query" @click="studio.newDocument">＋</button>
+        </nav>
         <div class="conversation">
           <div class="welcome-copy">
             <span class="spark">✦</span>
             <div><strong>What do you want to learn from your data?</strong><small>Ask naturally. You will always review the SQL before it runs.</small></div>
           </div>
+          <div v-if="studio.semanticModels.length" class="semantic-context-bar">
+            <span>◇ Semantic model</span>
+            <select v-model="studio.selectedSemanticModelId">
+              <option value="">Disabled</option>
+              <option v-for="model in studio.semanticModels" :key="model.id" :value="model.id">{{ model.name }}</option>
+            </select>
+            <button @click="businessModelDialog = true">Edit model</button>
+          </div>
           <div class="question-box">
             <textarea
-              v-model="studio.question"
+              v-model="question"
               rows="2"
               :disabled="!studio.selectedConnection"
               placeholder="Which customers generated the most revenue last month?"
@@ -156,28 +249,35 @@ async function useDemo() {
             />
             <div class="question-actions">
               <span>Ctrl ↵ to generate</span>
-              <button :disabled="studio.busy || !studio.question.trim() || !studio.selectedConnection" @click="studio.generate">
+              <button :disabled="studio.busy || !question.trim() || !studio.selectedConnection" @click="studio.generate">
                 <span v-if="studio.activity === 'generate'" class="spinner" />
                 <span v-else>✦</span> Generate SQL
               </button>
             </div>
           </div>
           <div v-if="studio.error" class="error-banner"><span>!</span>{{ studio.error }}</div>
+          <div v-if="studio.generationMode" :class="['generation-mode', studio.generationMode]">
+            <strong>{{ studio.generationMode === 'semantic' ? '◇ Semantic compilation' : '✦ Free-form SQL' }}</strong>
+            <span v-if="studio.generationMode === 'semantic'">Resolved through {{ studio.semanticTrace.length }} audited definitions.</span>
+            <span v-else>No exact semantic metric matched; the model received the business vocabulary as context.</span>
+          </div>
         </div>
 
         <section class="query-panel">
           <div class="query-heading">
-            <div><span class="status-dot" /><strong>SQL review</strong><small>Read-only execution</small></div>
-            <button v-if="!studio.activeJobId" class="write-button" :disabled="studio.busy || !studio.selectedConnection || !studio.sql.trim()" @click="studio.prepareWrite">Review write</button>
+            <div><span :class="['status-dot', studio.activeDocument?.lifecycle_state]" /><strong>SQL review</strong><small>{{ studio.activeDocument?.lifecycle_state }} · Read-only execution</small></div>
+            <button class="save-query-button" :disabled="!sql.trim()" @click="saveQuery(false)">{{ savedForActive ? "Save" : "Save query" }}</button>
+            <button v-if="savedForActive" class="save-query-button" :disabled="!sql.trim()" @click="saveQuery(true)">Save as</button>
+            <button v-if="!studio.activeJobId" class="write-button" :disabled="studio.busy || !studio.selectedConnection || !sql.trim()" @click="studio.prepareWrite">Review write</button>
             <button v-if="studio.activeJobId" class="cancel-button" @click="studio.cancelExecution">
               ■ Cancel
             </button>
-            <button v-else class="run-button" :disabled="studio.busy || !studio.selectedConnection || !studio.sql.trim()" @click="studio.execute">
+            <button v-else class="run-button" :disabled="studio.busy || !studio.selectedConnection || !sql.trim()" @click="studio.execute">
               <span v-if="studio.activity === 'execute'" class="spinner dark" />
               <span v-else>▶</span> Run query
             </button>
           </div>
-          <SqlEditor v-model="studio.sql" />
+          <SqlEditor v-model="sql" />
         </section>
 
         <section class="results-panel">
@@ -195,9 +295,20 @@ async function useDemo() {
                 <button title="Export Markdown" @click="studio.exportResults('markdown')">MD</button>
               </span>
             </div>
+            <div v-else-if="studio.activeDocument?.execution_status" class="execution-meta">
+              <span :class="studio.activeDocument.execution_status">{{ studio.activeDocument.execution_status }}</span>
+              <template v-if="studio.activeDocument.duration_ms !== null">{{ studio.activeDocument.duration_ms.toFixed(1) }} ms</template>
+              <template v-if="studio.activeDocument.row_count !== null"> · {{ studio.activeDocument.row_count }} rows</template>
+            </div>
           </div>
           <ResultsGrid v-if="activeTab === 'results'" :execution="studio.execution" :loading="studio.activity === 'execute'" />
           <div v-else class="messages-view">
+            <template v-if="studio.semanticTrace.length">
+              <strong>Semantic plan</strong>
+              <div v-for="item in studio.semanticTrace" :key="`${item.kind}-${item.name}`" class="semantic-trace-row">
+                <span>{{ item.kind }}</span><strong>{{ item.name }}</strong><code>{{ item.sql }}</code>
+              </div>
+            </template>
             <template v-if="studio.queryPlan">
               <strong>Query plan</strong>
               <div v-for="(row, index) in studio.queryPlan.rows" :key="index" class="plan-row">{{ row.join(' · ') }}</div>
@@ -215,6 +326,7 @@ async function useDemo() {
       @saved="connectionDialog = false"
     />
     <ModelDialog v-if="modelDialog" @close="modelDialog = false" />
+    <BusinessModelPanel v-if="businessModelDialog" @close="businessModelDialog = false" />
     <WriteReviewDialog v-if="studio.writeReview" />
     <div v-if="deletingConnection" class="modal-backdrop" @mousedown.self="deletingConnection = undefined">
       <section class="dialog confirm-dialog" role="alertdialog" aria-modal="true">

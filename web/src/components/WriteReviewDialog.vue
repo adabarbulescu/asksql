@@ -19,7 +19,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", closeOnEscape));
       </div>
       <div class="write-content">
         <div class="write-facts"><span>{{ studio.writeReview?.statement }}</span><span>{{ studio.selectedConnection }}</span><span>Expires {{ studio.writeReview?.expiresAt }}</span></div>
-        <pre>{{ studio.sql }}</pre>
+        <pre>{{ studio.activeDocument?.edited_sql }}</pre>
         <label>
           <span>Type <strong>{{ studio.selectedConnection }}</strong> to confirm</span>
           <input v-model="acknowledgement" autofocus autocomplete="off" />
