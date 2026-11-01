@@ -2,9 +2,17 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 from asksql.demo import create_demo_db
-from asksql.models import CancellationToken, ExecutionStatus, MutationResult, QueryExecution, QueryResult
+from asksql.models import (
+    AutoFixAttempt,
+    CancellationToken,
+    ExecutionStatus,
+    MutationResult,
+    QueryExecution,
+    QueryResult,
+)
 from asksql.service import QueryService
 
 
@@ -79,6 +87,111 @@ class QueryServiceTest(unittest.TestCase):
         token.cancel()
 
         self.assertEqual(calls, ["cancelled"])
+
+    def test_autofix_attempt_invariants(self) -> None:
+        with self.assertRaises(ValueError):
+            AutoFixAttempt(0, "select 1", None, ExecutionStatus.SUCCEEDED)
+        with self.assertRaises(ValueError):
+            AutoFixAttempt(1, "select 1", None, ExecutionStatus.SUCCEEDED, duration_ms=-1)
+
+        attempt = AutoFixAttempt(1, "select 1", None, ExecutionStatus.SUCCEEDED, duration_ms=10.5)
+        self.assertEqual(attempt.attempt, 1)
+
+    def test_execute_with_repair_success_without_retries(self) -> None:
+        service = QueryService(create_demo_db())
+        execution = service.execute_with_repair(
+            "get first customer",
+            "select id from customers order by id limit 1",
+            max_retries=2,
+        )
+        self.assertEqual(execution.status, ExecutionStatus.SUCCEEDED)
+        self.assertEqual(execution.attempts, [])
+
+    def test_execute_with_repair_recovers_from_error(self) -> None:
+        service = QueryService(create_demo_db())
+        # repair mock will return valid SQL
+        with patch.object(
+            service,
+            "repair",
+            return_value=MagicMock(sql="select id from customers order by id limit 1"),
+        ) as mock_repair:
+            execution = service.execute_with_repair(
+                "get first customer",
+                "select id from non_existent_table limit 1",
+                max_retries=2,
+            )
+
+        self.assertEqual(execution.status, ExecutionStatus.SUCCEEDED)
+        self.assertEqual(len(execution.attempts), 2)
+        self.assertEqual(execution.attempts[0].attempt, 1)
+        self.assertEqual(execution.attempts[0].status, ExecutionStatus.FAILED)
+        self.assertEqual(execution.attempts[1].attempt, 2)
+        self.assertEqual(execution.attempts[1].status, ExecutionStatus.SUCCEEDED)
+        self.assertEqual(execution.sql, "select id from customers order by id limit 1")
+        mock_repair.assert_called_once()
+
+    def test_execute_with_repair_exhausts_retries(self) -> None:
+        service = QueryService(create_demo_db())
+        with patch.object(
+            service,
+            "repair",
+            return_value=MagicMock(sql="select * from still_broken"),
+        ):
+            execution = service.execute_with_repair(
+                "broken query",
+                "select * from broken_table",
+                max_retries=2,
+            )
+
+        self.assertEqual(execution.status, ExecutionStatus.FAILED)
+        self.assertEqual(len(execution.attempts), 3)  # initial + 2 retries
+        self.assertEqual([a.attempt for a in execution.attempts], [1, 2, 3])
+
+    def test_execute_with_repair_refuses_unsafe_repair(self) -> None:
+        service = QueryService(create_demo_db())
+        with patch.object(
+            service,
+            "repair",
+            return_value=MagicMock(sql="delete from customers"),
+        ):
+            execution = service.execute_with_repair(
+                "delete query",
+                "select * from non_existent",
+                max_retries=2,
+            )
+
+        self.assertEqual(execution.status, ExecutionStatus.REFUSED)
+        self.assertEqual(len(execution.attempts), 2)
+        self.assertEqual(execution.attempts[1].status, ExecutionStatus.REFUSED)
+
+    def test_execute_with_repair_does_not_retry_timeout(self) -> None:
+        service = QueryService(create_demo_db())
+        sql = """
+        with recursive nums(n) as (
+            select 1
+            union all
+            select n + 1 from nums where n < 100000000
+        )
+        select sum(a.n + b.n)
+        from nums a, nums b
+        """
+        with patch.object(service, "repair") as mock_repair:
+            execution = service.execute_with_repair("slow query", sql, timeout=0.001, max_retries=2)
+
+        self.assertEqual(execution.status, ExecutionStatus.TIMED_OUT)
+        mock_repair.assert_not_called()
+
+    def test_execute_with_repair_respects_cancellation(self) -> None:
+        service = QueryService(create_demo_db())
+        token = CancellationToken()
+        token.cancel()
+        execution = service.execute_with_repair(
+            "test query",
+            "select * from broken",
+            cancellation=token,
+            max_retries=2,
+        )
+        self.assertEqual(execution.status, ExecutionStatus.CANCELLED)
 
 
 if __name__ == "__main__":

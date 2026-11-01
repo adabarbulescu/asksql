@@ -253,6 +253,7 @@ export const useStudioStore = defineStore("studio", {
           question: this.activeDocument.question.trim() || undefined,
           model: this.generatedHistoryId ? this.model : undefined,
           source: this.generatedHistoryId ? "ai" : "manual",
+          autoFix: Boolean(this.generatedHistoryId || this.activeDocument.question.trim()),
           documentId: this.activeDocument.id,
           savedQueryId: this.activeDocument.saved_query_id ?? undefined,
           parameterValues: this.activeDocument.parameter_values,
@@ -268,6 +269,9 @@ export const useStudioStore = defineStore("studio", {
         }
         this.execution = job.execution ?? null;
         if (!this.execution) throw new Error("Execution completed without a result");
+        if (this.execution.sql && this.activeDocument && this.execution.sql !== this.activeDocument.edited_sql) {
+          this.activeDocument.edited_sql = this.execution.sql;
+        }
         if (this.execution.status !== "succeeded") {
           this.error = this.execution.error ?? "Query failed";
         }

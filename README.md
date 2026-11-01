@@ -218,6 +218,12 @@ Preview SQL without running it:
 asksql --dry-run ask sqlite://app.db "users created yesterday"
 ```
 
+Automatically repair SQL on execution errors:
+
+```bash
+asksql --auto-fix ask sqlite://app.db "which customers spent the most?"
+```
+
 The older shorthand still works for now:
 
 ```bash

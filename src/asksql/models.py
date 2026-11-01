@@ -91,12 +91,28 @@ class ExecutionStatus(str, Enum):
 
 
 @dataclass(frozen=True)
+class AutoFixAttempt:
+    attempt: int
+    sql: str
+    error: str | None
+    status: ExecutionStatus
+    duration_ms: float = 0.0
+
+    def __post_init__(self) -> None:
+        if self.attempt < 1:
+            raise ValueError("attempt must be positive")
+        if self.duration_ms < 0:
+            raise ValueError("attempt duration cannot be negative")
+
+
+@dataclass(frozen=True)
 class QueryExecution:
     sql: str
     result: QueryResult | MutationResult | None
     duration_ms: float
     status: ExecutionStatus
     error: str | None
+    attempts: list[AutoFixAttempt] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         succeeded = self.status == ExecutionStatus.SUCCEEDED

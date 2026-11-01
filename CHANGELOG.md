@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented in this file.
 
+## [Unreleased]
+
+- Added end-to-end Self-Correction / Auto-Fix loop (`--auto-fix` and `--retries 1-5`) for text-to-SQL generation.
+- Added multi-turn database error conditioning for both Ollama and OpenAI-compatible models (`repair_sql`).
+- Added `AutoFixAttempt` telemetry and attempt tracking to `QueryExecution` and Studio API.
+- Integrated auto-fix in AskSQL Studio execution flows with real-time editor SQL updates upon repair.
+- Preserved strict read-only safety invariants and clean stdout isolation for piped export formats.
+
 ## [0.8.0] - 2026-08-02
 
 - Added a persistent Analysis Engine with reusable declarative workflows, bounded semantic query plans, immutable
@@ -44,6 +52,7 @@ All notable changes to this project are documented in this file.
   schema context, natural-language question, generated SQL, edited SQL, execution metadata, and result references.
 - Added explicit draft, generated, running, completed, failed, and cancelled document lifecycles, including recovery
   of an interrupted running query after Studio restarts.
+>>>>>>> origin/main
 
 ## [0.3.0] - 2026-07-19
 

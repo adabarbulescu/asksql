@@ -319,6 +319,14 @@ export interface QueryResult {
   limit: number;
 }
 
+export interface AutoFixAttempt {
+  attempt: number;
+  sql: string;
+  error: string | null;
+  status: "succeeded" | "refused" | "failed" | "timed_out" | "cancelled";
+  durationMs: number;
+}
+
 export interface QueryExecution {
   sql: string;
   status: "succeeded" | "refused" | "failed" | "timed_out" | "cancelled";
@@ -330,6 +338,7 @@ export interface QueryExecution {
     lastInsertId: number | null;
   };
   historyId?: string;
+  attempts?: AutoFixAttempt[];
 }
 
 export interface ExecutionJob {

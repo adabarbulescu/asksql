@@ -34,6 +34,9 @@ class ExecutionManager:
         limit: int,
         timeout: float,
         allow_write: bool = False,
+        question: str | None = None,
+        auto_fix: bool = False,
+        retries: int = 2,
         completed: Callable[[QueryExecution], None] | None = None,
         parameters: Mapping[str, object] | None = None,
     ) -> ExecutionJob:
@@ -44,14 +47,25 @@ class ExecutionManager:
         def run() -> None:
             with self._lock:
                 job.state = "running"
-            execution = service.execute(
-                sql,
-                limit=limit,
-                timeout=timeout,
-                cancellation=job.token,
-                allow_write=allow_write,
-                parameters=parameters,
-            )
+            if auto_fix and question and not allow_write:
+                execution = service.execute_with_repair(
+                    question,
+                    sql,
+                    limit=limit,
+                    timeout=timeout,
+                    cancellation=job.token,
+                    max_retries=retries,
+                    parameters=parameters,
+                )
+            else:
+                execution = service.execute(
+                    sql,
+                    limit=limit,
+                    timeout=timeout,
+                    cancellation=job.token,
+                    allow_write=allow_write,
+                    parameters=parameters,
+                )
             try:
                 if completed:
                     completed(execution)

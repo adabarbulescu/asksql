@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import time
-from typing import Mapping
+from typing import Callable, Mapping
 
 from asksql.adapters import adapter_for
-from asksql.llm import generate_sql
+from asksql.llm import generate_sql, repair_sql
 from asksql.models import (
+    AutoFixAttempt,
     CancellationToken,
     ExecutionStatus,
     GeneratedQuery,
@@ -33,6 +34,19 @@ class QueryService:
             schema = f"{schema}\n\n{semantic_context}"
         sql = generate_sql(self.model, schema, question, self.adapter.dialect)
         return GeneratedQuery(question, sql, self.model)
+
+    def repair(
+        self,
+        question: str,
+        failed_sql: str,
+        error: str,
+        tables: list[str] | None = None,
+        model: str | None = None,
+    ) -> GeneratedQuery:
+        target_model = model or self.model
+        schema = self.adapter.schema(tables)
+        sql = repair_sql(target_model, schema, question, failed_sql, error, self.adapter.dialect)
+        return GeneratedQuery(question, sql, target_model)
 
     def execute(
         self,
@@ -68,6 +82,131 @@ class QueryService:
         except Exception as exc:
             return self._execution(sql, started, ExecutionStatus.FAILED, str(exc))
         return QueryExecution(sql, result, (time.monotonic() - started) * 1000, ExecutionStatus.SUCCEEDED, None)
+
+    def execute_with_repair(
+        self,
+        question: str,
+        sql: str,
+        *,
+        limit: int = DEFAULT_LIMIT,
+        timeout: float | None = DEFAULT_TIMEOUT,
+        cancellation: CancellationToken | None = None,
+        max_retries: int = 2,
+        tables: list[str] | None = None,
+        on_repair_attempt: Callable[[AutoFixAttempt], None] | None = None,
+        parameters: Mapping[str, object] | None = None,
+    ) -> QueryExecution:
+        started = time.monotonic()
+        execution = self.execute(
+            sql,
+            limit=limit,
+            timeout=timeout,
+            cancellation=cancellation,
+            allow_write=False,
+            parameters=parameters,
+        )
+        if execution.status != ExecutionStatus.FAILED or max_retries <= 0:
+            return execution
+
+        attempts: list[AutoFixAttempt] = [
+            AutoFixAttempt(
+                attempt=1,
+                sql=execution.sql,
+                error=execution.error,
+                status=execution.status,
+                duration_ms=execution.duration_ms,
+            )
+        ]
+        if on_repair_attempt:
+            on_repair_attempt(attempts[0])
+
+        current_sql = sql
+        current_error = execution.error or "Unknown database error"
+
+        for retry_idx in range(1, max_retries + 1):
+            if cancellation and cancellation.cancelled:
+                return QueryExecution(
+                    current_sql,
+                    None,
+                    (time.monotonic() - started) * 1000,
+                    ExecutionStatus.CANCELLED,
+                    "Query cancelled",
+                    attempts=attempts,
+                )
+
+            try:
+                repaired = self.repair(question, current_sql, current_error, tables)
+                repaired_sql = repaired.sql
+            except Exception as exc:
+                return QueryExecution(
+                    current_sql,
+                    None,
+                    (time.monotonic() - started) * 1000,
+                    ExecutionStatus.FAILED,
+                    f"Auto-fix repair failed: {exc}",
+                    attempts=attempts,
+                )
+
+            if cancellation and cancellation.cancelled:
+                return QueryExecution(
+                    repaired_sql,
+                    None,
+                    (time.monotonic() - started) * 1000,
+                    ExecutionStatus.CANCELLED,
+                    "Query cancelled",
+                    attempts=attempts,
+                )
+
+            repair_exec = self.execute(
+                repaired_sql,
+                limit=limit,
+                timeout=timeout,
+                cancellation=cancellation,
+                allow_write=False,
+                parameters=parameters,
+            )
+            attempt_record = AutoFixAttempt(
+                attempt=retry_idx + 1,
+                sql=repaired_sql,
+                error=repair_exec.error,
+                status=repair_exec.status,
+                duration_ms=repair_exec.duration_ms,
+            )
+            attempts.append(attempt_record)
+            if on_repair_attempt:
+                on_repair_attempt(attempt_record)
+
+            if repair_exec.status == ExecutionStatus.SUCCEEDED:
+                return QueryExecution(
+                    repaired_sql,
+                    repair_exec.result,
+                    (time.monotonic() - started) * 1000,
+                    ExecutionStatus.SUCCEEDED,
+                    None,
+                    attempts=attempts,
+                )
+
+            if repair_exec.status != ExecutionStatus.FAILED:
+                return QueryExecution(
+                    repaired_sql,
+                    None,
+                    (time.monotonic() - started) * 1000,
+                    repair_exec.status,
+                    repair_exec.error,
+                    attempts=attempts,
+                )
+
+            current_sql = repaired_sql
+            current_error = repair_exec.error or "Unknown database error"
+
+        return QueryExecution(
+            current_sql,
+            None,
+            (time.monotonic() - started) * 1000,
+            ExecutionStatus.FAILED,
+            current_error,
+            attempts=attempts,
+        )
 
     def _execution(self, sql: str, started: float, status: ExecutionStatus, error: str) -> QueryExecution:
         return QueryExecution(sql, None, (time.monotonic() - started) * 1000, status, error)

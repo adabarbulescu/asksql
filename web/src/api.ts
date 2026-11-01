@@ -264,7 +264,14 @@ export function generateSql(
 export function executeSql(
   connection: string,
   sql: string,
-  metadata: { historyId?: string; question?: string; model?: string; source?: "ai" | "manual" } = {},
+  metadata: {
+    historyId?: string;
+    question?: string;
+    model?: string;
+    source?: "ai" | "manual";
+    autoFix?: boolean;
+    retries?: number;
+  } = {},
 ): Promise<QueryExecution & { historyId: string }> {
   return request<QueryExecution & { historyId: string }>("/api/query/execute", {
     method: "POST",
@@ -275,6 +282,8 @@ export function executeSql(
       question: metadata.question,
       model: metadata.model,
       source: metadata.source ?? "manual",
+      auto_fix: metadata.autoFix ?? false,
+      retries: metadata.retries ?? 2,
     }),
   });
 }
@@ -329,7 +338,19 @@ export async function generateSqlStream(
 export function startExecution(
   connection: string,
   sql: string,
-  metadata: { historyId?: string; question?: string; model?: string; source?: "ai" | "manual"; documentId?: string; savedQueryId?: string; parameterValues?: Record<string, unknown>; semanticModelId?: string; semanticPlan?: SemanticQueryPlan | null } = {},
+  metadata: {
+    historyId?: string;
+    question?: string;
+    model?: string;
+    source?: "ai" | "manual";
+    autoFix?: boolean;
+    retries?: number;
+    documentId?: string;
+    savedQueryId?: string;
+    parameterValues?: Record<string, unknown>;
+    semanticModelId?: string;
+    semanticPlan?: SemanticQueryPlan | null;
+  } = {},
 ): Promise<ExecutionJob> {
   return request<ExecutionJob>("/api/query/jobs", {
     method: "POST",
@@ -340,6 +361,8 @@ export function startExecution(
       question: metadata.question,
       model: metadata.model,
       source: metadata.source ?? "manual",
+      auto_fix: metadata.autoFix ?? false,
+      retries: metadata.retries ?? 2,
       document_id: metadata.documentId,
       saved_query_id: metadata.savedQueryId,
       parameter_values: metadata.parameterValues,
