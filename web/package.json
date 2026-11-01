@@ -24,10 +24,14 @@
     "@playwright/test": "^1.55.0",
     "@vitejs/plugin-vue": "^5.2.3",
     "@vue/test-utils": "^2.2.7",
-    "happy-dom": "^20.11.1",
+    "happy-dom": "^21.0.4",
     "typescript": "~5.7.2",
     "vite": "^6.2.0",
     "vitest": "^3.2.4",
     "vue-tsc": "^3.3.8"
+  },
+  "overrides": {
+    "happy-dom": "^21.0.4",
+    "tinypool": "^2.2.0"
   }
 }
