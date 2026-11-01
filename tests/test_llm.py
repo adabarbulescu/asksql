@@ -2,7 +2,7 @@ import os
 import unittest
 from unittest.mock import MagicMock, patch
 
-from asksql.llm import check_model
+from asksql.llm import check_model, repair_sql
 
 
 class ModelCheckTest(unittest.TestCase):
@@ -40,6 +40,57 @@ class ModelCheckTest(unittest.TestCase):
     def test_rejects_malformed_or_unsupported_model(self) -> None:
         self.assertFalse(check_model("qwen")[0])
         self.assertFalse(check_model("other:qwen")[0])
+
+
+class RepairSqlTest(unittest.TestCase):
+    def test_ollama_repair_calls_endpoint(self) -> None:
+        with patch.dict(os.environ, {"OLLAMA_BASE_URL": "http://localhost:11434"}):
+            with patch("asksql.llm.post_json", return_value={"response": "select * from users limit 5;"}) as mock_post:
+                sql = repair_sql(
+                    "ollama:qwen",
+                    "users(id, name)",
+                    "get all users",
+                    "select * from usr;",
+                    "no such table: usr",
+                    dialect="sqlite",
+                )
+        self.assertEqual(sql, "select *\nfrom users\nlimit 5;")
+        mock_post.assert_called_once()
+        payload = mock_post.call_args[0][1]
+        self.assertIn("no such table: usr", payload["prompt"])
+        self.assertIn("select * from usr;", payload["prompt"])
+        self.assertIn("users(id, name)", payload["prompt"])
+
+    def test_openai_repair_constructs_multiturn_messages(self) -> None:
+        return_payload = {"choices": [{"message": {"content": "SELECT 1"}}]}
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+            with patch("asksql.llm.post_json", return_value=return_payload) as mock_post:
+                sql = repair_sql(
+                    "openai:gpt-4o",
+                    "t(a)",
+                    "count items",
+                    "select count(*) from wrong",
+                    "no such table",
+                    dialect="sqlite",
+                )
+        self.assertEqual(sql, "SELECT 1")
+        messages = mock_post.call_args[0][1]["messages"]
+        self.assertEqual(len(messages), 4)
+        self.assertEqual(messages[0]["role"], "system")
+        self.assertEqual(messages[1]["role"], "user")
+        self.assertEqual(messages[2]["role"], "assistant")
+        self.assertEqual(messages[2]["content"], "select count(*) from wrong")
+        self.assertEqual(messages[3]["role"], "user")
+        self.assertIn("no such table", messages[3]["content"])
+
+    def test_repair_sql_rejects_unsupported_provider(self) -> None:
+        with self.assertRaises(ValueError):
+            repair_sql("anthropic:claude", "schema", "q", "bad sql", "err")
+
+    def test_openai_repair_requires_api_key(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            with self.assertRaises(RuntimeError):
+                repair_sql("openai:gpt-4o", "schema", "q", "bad sql", "err")
 
 
 if __name__ == "__main__":

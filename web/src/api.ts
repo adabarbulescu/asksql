@@ -109,7 +109,14 @@ export function generateSql(
 export function executeSql(
   connection: string,
   sql: string,
-  metadata: { historyId?: string; question?: string; model?: string; source?: "ai" | "manual" } = {},
+  metadata: {
+    historyId?: string;
+    question?: string;
+    model?: string;
+    source?: "ai" | "manual";
+    autoFix?: boolean;
+    retries?: number;
+  } = {},
 ): Promise<QueryExecution & { historyId: string }> {
   return request<QueryExecution & { historyId: string }>("/api/query/execute", {
     method: "POST",
@@ -120,6 +127,8 @@ export function executeSql(
       question: metadata.question,
       model: metadata.model,
       source: metadata.source ?? "manual",
+      auto_fix: metadata.autoFix ?? false,
+      retries: metadata.retries ?? 2,
     }),
   });
 }
@@ -166,7 +175,14 @@ export async function generateSqlStream(
 export function startExecution(
   connection: string,
   sql: string,
-  metadata: { historyId?: string; question?: string; model?: string; source?: "ai" | "manual" } = {},
+  metadata: {
+    historyId?: string;
+    question?: string;
+    model?: string;
+    source?: "ai" | "manual";
+    autoFix?: boolean;
+    retries?: number;
+  } = {},
 ): Promise<ExecutionJob> {
   return request<ExecutionJob>("/api/query/jobs", {
     method: "POST",
@@ -177,6 +193,8 @@ export function startExecution(
       question: metadata.question,
       model: metadata.model,
       source: metadata.source ?? "manual",
+      auto_fix: metadata.autoFix ?? false,
+      retries: metadata.retries ?? 2,
     }),
   });
 }

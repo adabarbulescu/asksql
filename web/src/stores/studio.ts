@@ -181,6 +181,7 @@ export const useStudioStore = defineStore("studio", {
           question: this.question.trim() || undefined,
           model: this.generatedHistoryId ? this.model : undefined,
           source: this.generatedHistoryId ? "ai" : "manual",
+          autoFix: Boolean(this.generatedHistoryId || this.question.trim()),
         });
         this.activeJobId = job.jobId;
         this.activeHistoryId = job.historyId;
@@ -191,6 +192,9 @@ export const useStudioStore = defineStore("studio", {
         }
         this.execution = job.execution ?? null;
         if (!this.execution) throw new Error("Execution completed without a result");
+        if (this.execution.sql && this.execution.sql !== this.sql) {
+          this.sql = this.execution.sql;
+        }
         if (this.execution.status !== "succeeded") {
           this.error = this.execution.error ?? "Query failed";
         }

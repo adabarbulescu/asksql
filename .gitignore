@@ -11,3 +11,4 @@ web/playwright-report/
 web/test-results/
 dist/
 *.egg-info/
+.asksql-config/

@@ -17,7 +17,7 @@ from asksql.demo import create_demo_db
 from asksql.diagnostics import diagnostics
 from asksql.export import format_result
 from asksql.llm import ollama_models
-from asksql.models import ExecutionStatus, MutationResult, QueryExecution, QueryResult
+from asksql.models import AutoFixAttempt, ExecutionStatus, MutationResult, QueryExecution, QueryResult
 from asksql.service import QueryService
 from asksql.setup import DEFAULT_MODEL, setup_status
 from asksql.sql import pretty_sql
@@ -28,7 +28,7 @@ from asksql.tui import pick_connection, run_tui
 console = Console()
 error_console = Console(stderr=True)
 COMMANDS = {"ask", "run", "tui", "ui", "schema", "models", "connections", "setup", "diagnostics"}
-VALUE_OPTIONS = {"--model", "--format", "--output", "--limit", "--timeout"}
+VALUE_OPTIONS = {"--model", "--format", "--output", "--limit", "--timeout", "--retries"}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -125,6 +125,12 @@ def base_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("-y", "--yes", action="store_true", help="run read-only SQL without prompting")
     parser.add_argument("--show-schema", action="store_true", help="print the schema sent to the model")
+    parser.add_argument(
+        "--auto-fix", action="store_true", help="automatically repair SQL if execution fails with an error"
+    )
+    parser.add_argument(
+        "--retries", type=retry_limit, default=2, help="maximum auto-fix retry attempts, 1-5 (default: 2)"
+    )
     return parser
 
 
@@ -314,7 +320,41 @@ def command_ask(args: argparse.Namespace) -> int:
     if not args.yes and not confirm_run():
         return 1
 
-    execution = service.execute(sql, limit=args.limit, timeout=args.timeout)
+    if getattr(args, "auto_fix", False):
+
+        def on_repair(attempt: AutoFixAttempt) -> None:
+            if attempt.attempt == 1:
+                sql_console.print(f"[yellow]Execution failed on initial query:[/] {attempt.error}")
+            elif attempt.status == ExecutionStatus.SUCCEEDED:
+                sql_console.print(
+                    Panel(
+                        Syntax(attempt.sql, "sql", theme="ansi_dark"),
+                        title=f"Auto-fixed SQL (attempt {attempt.attempt})",
+                        border_style="green",
+                    )
+                )
+                sql_console.print(f"[green]Auto-fix succeeded on attempt {attempt.attempt}![/]")
+            else:
+                sql_console.print(
+                    Panel(
+                        Syntax(attempt.sql, "sql", theme="ansi_dark"),
+                        title=f"Repair attempt {attempt.attempt} failed",
+                        border_style="yellow",
+                    )
+                )
+                sql_console.print(f"[yellow]Attempt {attempt.attempt} failed:[/] {attempt.error}")
+
+        execution = service.execute_with_repair(
+            question,
+            sql,
+            limit=args.limit,
+            timeout=args.timeout,
+            max_retries=getattr(args, "retries", 2),
+            on_repair_attempt=on_repair,
+        )
+    else:
+        execution = service.execute(sql, limit=args.limit, timeout=args.timeout)
+
     if execution.status != ExecutionStatus.SUCCEEDED:
         return print_execution_error(execution)
     assert execution.result is not None
@@ -415,6 +455,16 @@ def studio_port(value: str) -> int:
     if not 1 <= port <= 65535:
         raise argparse.ArgumentTypeError("port must be between 1 and 65535")
     return port
+
+
+def retry_limit(value: str) -> int:
+    try:
+        retries = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("retries must be an integer") from exc
+    if not 1 <= retries <= 5:
+        raise argparse.ArgumentTypeError("retries must be between 1 and 5")
+    return retries
 
 
 def print_table(result: QueryResult) -> None:

@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from asksql.cli import main
 from asksql.connections import ConnectionStore
+from asksql.models import AutoFixAttempt, ExecutionStatus, QueryExecution, QueryResult
 from asksql.studio import create_app
 from asksql.workspace import WorkspaceStore
 from tests.api_client import DirectClient
@@ -132,6 +133,37 @@ class StudioApiTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "succeeded")
         self.assertEqual(response.json()["result"]["rows"], [["AskSQL Studio"]])
+
+    def test_executes_query_with_auto_fix(self) -> None:
+        with patch("asksql.studio.server.QueryService.execute_with_repair") as mock_repair:
+            mock_repair.return_value = QueryExecution(
+                "select name from projects",
+                QueryResult(["name"], [("AskSQL Studio",)], False, 200),
+                12.5,
+                ExecutionStatus.SUCCEEDED,
+                None,
+                attempts=[
+                    AutoFixAttempt(1, "select name from proj", "no such table: proj", ExecutionStatus.FAILED, 5.0),
+                    AutoFixAttempt(2, "select name from projects", None, ExecutionStatus.SUCCEEDED, 7.5),
+                ],
+            )
+            response = self.client.post(
+                "/api/query/execute",
+                json={
+                    "connection": "local",
+                    "sql": "select name from proj",
+                    "question": "show project names",
+                    "auto_fix": True,
+                    "retries": 2,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["status"], "succeeded")
+        self.assertEqual(len(data["attempts"]), 2)
+        self.assertEqual(data["attempts"][0]["status"], "failed")
+        self.assertEqual(data["attempts"][1]["status"], "succeeded")
 
     def test_generates_sql_through_existing_query_service(self) -> None:
         with patch("asksql.studio.server.QueryService.generate") as generate:

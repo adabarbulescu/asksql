@@ -16,6 +16,12 @@ Return only SQL, no markdown.
 Use only the provided schema.
 Add a small LIMIT when the user does not specify one."""
 
+REPAIR_SYSTEM = """You are an expert SQL engineer repairing a failed {dialect} query.
+Fix the SQL query so it runs without error and correctly answers the user's question.
+Return only SQL, no markdown.
+Use only the provided schema.
+Add a small LIMIT when the user does not specify one."""
+
 
 def generate_sql(model: str, schema: str, question: str, dialect: str = "sqlite") -> str:
     provider, _, name = model.partition(":")
@@ -23,6 +29,22 @@ def generate_sql(model: str, schema: str, question: str, dialect: str = "sqlite"
         return ollama(name or "qwen2.5-coder", schema, question, dialect)
     if provider == "openai":
         return openai(name or "gpt-4.1-mini", schema, question, dialect)
+    raise ValueError("model must look like ollama:name or openai:name")
+
+
+def repair_sql(
+    model: str,
+    schema: str,
+    question: str,
+    failed_sql: str,
+    error: str,
+    dialect: str = "sqlite",
+) -> str:
+    provider, _, name = model.partition(":")
+    if provider == "ollama":
+        return ollama_repair(name or "qwen2.5-coder", schema, question, failed_sql, error, dialect)
+    if provider == "openai":
+        return openai_repair(name or "gpt-4.1-mini", schema, question, failed_sql, error, dialect)
     raise ValueError("model must look like ollama:name or openai:name")
 
 
@@ -39,6 +61,28 @@ def post_json(url: str, payload: dict[str, object], headers: dict[str, str] | No
 def ollama(model: str, schema: str, question: str, dialect: str = "sqlite") -> str:
     base_url = ollama_base_url()
     prompt = f"{SYSTEM.format(dialect=dialect)}\n\nSchema:\n{schema}\n\nQuestion:\n{question}\n\nSQL:"
+    data = post_json(f"{base_url}/api/generate", {"model": model, "prompt": prompt, "stream": False})
+    return clean_sql(str(data.get("response", "")))
+
+
+def ollama_repair(
+    model: str,
+    schema: str,
+    question: str,
+    failed_sql: str,
+    error: str,
+    dialect: str = "sqlite",
+) -> str:
+    base_url = ollama_base_url()
+    prompt = (
+        f"{REPAIR_SYSTEM.format(dialect=dialect)}\n\n"
+        f"Schema:\n{schema}\n\n"
+        f"Question:\n{question}\n\n"
+        f"Failed SQL:\n{failed_sql}\n\n"
+        f"Database Error:\n{error}\n\n"
+        f"Instructions:\nAnalyze the database error, consult the schema, and provide the corrected {dialect} SQL.\n\n"
+        f"SQL:"
+    )
     data = post_json(f"{base_url}/api/generate", {"model": model, "prompt": prompt, "stream": False})
     return clean_sql(str(data.get("response", "")))
 
@@ -135,6 +179,43 @@ def openai(model: str, schema: str, question: str, dialect: str = "sqlite") -> s
             "messages": [
                 {"role": "system", "content": SYSTEM.format(dialect=dialect)},
                 {"role": "user", "content": f"Schema:\n{schema}\n\nQuestion:\n{question}"},
+            ],
+        },
+        {"Authorization": f"Bearer {api_key}"},
+    )
+    return clean_sql(str(data["choices"][0]["message"]["content"]))
+
+
+def openai_repair(
+    model: str,
+    schema: str,
+    question: str,
+    failed_sql: str,
+    error: str,
+    dialect: str = "sqlite",
+) -> str:
+    api_key = get_secret("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY is required for openai:* models")
+    base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+    data = post_json(
+        f"{base_url}/chat/completions",
+        {
+            "model": model,
+            "temperature": 0,
+            "messages": [
+                {"role": "system", "content": REPAIR_SYSTEM.format(dialect=dialect)},
+                {"role": "user", "content": f"Schema:\n{schema}\n\nQuestion:\n{question}"},
+                {"role": "assistant", "content": failed_sql},
+                {
+                    "role": "user",
+                    "content": (
+                        f"Executing that query failed with the following database error:\n"
+                        f"{error}\n\n"
+                        f"Please fix the SQL query to resolve this error using only the provided schema. "
+                        f"Return only the corrected {dialect} SQL."
+                    ),
+                },
             ],
         },
         {"Authorization": f"Bearer {api_key}"},

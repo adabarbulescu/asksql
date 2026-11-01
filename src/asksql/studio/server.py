@@ -48,6 +48,8 @@ class ExecuteRequest(BaseModel):
     question: str | None = Field(default=None, max_length=10_000)
     model: str | None = Field(default=None, max_length=200)
     source: str = Field(default="manual", pattern="^(manual|ai)$")
+    auto_fix: bool = Field(default=False)
+    retries: int = Field(default=2, ge=1, le=5)
 
 
 class ConnectionRequest(BaseModel):
@@ -310,12 +312,28 @@ def create_app(
                 question=request.question,
                 model=request.model,
             ).id
-        execution = QueryService(profile.url).execute(
-            request.sql,
-            limit=request.limit,
-            timeout=request.timeout,
-            allow_write=False,
-        )
+        question = request.question
+        if question is None and history_id is not None:
+            try:
+                question = workspace_store.get(history_id).question
+            except KeyError:
+                question = None
+        service = QueryService(profile.url, request.model or "")
+        if request.auto_fix and question:
+            execution = service.execute_with_repair(
+                question,
+                request.sql,
+                limit=request.limit,
+                timeout=request.timeout,
+                max_retries=request.retries,
+            )
+        else:
+            execution = service.execute(
+                request.sql,
+                limit=request.limit,
+                timeout=request.timeout,
+                allow_write=False,
+            )
         payload = _execution_payload(execution, history_id)
         try:
             workspace_store.complete(history_id, execution)
@@ -335,16 +353,25 @@ def create_app(
                 question=request.question,
                 model=request.model,
             ).id
+        question = request.question
+        if question is None and history_id is not None:
+            try:
+                question = workspace_store.get(history_id).question
+            except KeyError:
+                question = None
 
         def record_completion(execution: QueryExecution) -> None:
             workspace_store.complete(history_id, execution)
 
         job = execution_manager.start(
-            QueryService(profile.url),
+            QueryService(profile.url, request.model or ""),
             request.sql,
             history_id,
             limit=request.limit,
             timeout=request.timeout,
+            question=question,
+            auto_fix=request.auto_fix,
+            retries=request.retries,
             completed=record_completion,
         )
         return {"jobId": job.id, "historyId": history_id, "state": job.state}
@@ -510,6 +537,16 @@ def _execution_payload(execution: QueryExecution, history_id: str) -> dict[str, 
         "durationMs": round(execution.duration_ms, 3),
         "error": execution.error,
         "historyId": history_id,
+        "attempts": [
+            {
+                "attempt": a.attempt,
+                "sql": a.sql,
+                "error": a.error,
+                "status": a.status.value,
+                "durationMs": round(a.duration_ms, 3),
+            }
+            for a in execution.attempts
+        ],
     }
     if execution.status != ExecutionStatus.SUCCEEDED:
         return payload
